@@ -37,6 +37,7 @@
 # 2014/05/24 v1.0.11 Brenn Oosterbaan - bugfix in NMS unresponiveness
 # 2014/07/02 v1.0.12 Brenn Oosterbaan - bugfix in ReadConfig
 # 2014/07/02 v1.0.13 Brenn Oosterbaan - added nms retry value
+# 2016/02/11 v1.0.14 Michael Weinrich - code style fixes (PEP8)
 # ----------------------------------------------------------------
 # ----------------------------------------------------------------
 # Schuberg Philis 2012
@@ -69,7 +70,7 @@ except ImportError:
 
 class CritError(Exception):
     def __init__(self, message):
-        print "CRITICAL: %s" % message
+        print("CRITICAL: %s" % message)
         sys.exit(NagiosStates.CRITICAL)
 
 
@@ -93,6 +94,8 @@ class NagiosStates:
 
 
 class ReadConfig:
+    parse = None
+
     def __init__(self):
         pass
 
@@ -310,7 +313,7 @@ def check_spaceusage(nexenta):
                     threshold += ';IGNORE;IGNORE'
                 elif len(threshold.split(';')) != 5:
                     raise CritError(
-                            "Error in config file at [%s]:space_threshold, line %s" % (nexenta['hostname'], threshold))
+                        "Error in config file at [%s]:space_threshold, line %s" % (nexenta['hostname'], threshold))
 
                 # Get the thresholds, or fall back to the default tresholds.
                 if vol + ';' in thresholds:
@@ -594,87 +597,87 @@ def main(argv):
 
     # Append performance data if collected and print output.
     if perfdata:
-        return '%s|%s' % ('<br>'.join(output), ' '.join(perfdata))
+        return "%s|%s" % ('<br>'.join(output), ' '.join(perfdata))
     else:
         return '<br>'.join(output)
 
 
 def print_usage():
-    print "usage: check_nexenta.py -H <arg> [options]"
-    print "Options and arguments (defaults to [-D, -T] if only -H is given):"
-    print "-H arg : Nexenta to check. Can be hostname or IP adress. Must be configured in"
-    print "         the config file. Short for --hostname."
-    print "-D     : Check space usage of volumes. Thresholds are configured in the config"
-    print "         file."
-    print "-T     : Check fault triggers."
-    print "-P     : Report SNMP performance data. Must be configured in the config file."
-    print "         Reports data for CPU, Disk, Snapshot, Memory and Network."
-    print "-E     : Report SNMP extend data. Must be configured in the config file."
-    print "       : See help below on snmp_extend for more info."
-    print "-f     : Config file to use. Defaults to <scriptname>.cfg if not given."
-    print "-V     : Show version information. Short for --version."
-    print "-h     : Show help information. Short for --help."
-    print ""
-    print "Config file sections and options:"
-    print "[<hostname>]    : Nexenta to check. Should match argument passed to -H."
-    print "                  Config file can contain multiple sections of [<hostname>]."
-    print "api_user        : Username which has API rights on the Nexenta"
-    print "api_pass        : Password for the user with API rights."
-    print "api_ssl         : Use HTTP-SSL (https://) for connection."
-    print "api_port        : Port used for API connection to the Nexenta. Defaults to"
-    print "                  standard NMV port (2000) if not set."
-    print "snmp_user       : SNMP username with ro rights on the Nexenta. Only needed"
-    print "                  for SNMP v3."
-    print "snmp_pass       : Password for the SNMP user. Only needed for SNMP v3."
-    print "snmp_community  : SNMP ro community. Only needed for SNMP v2. Will not be"
-    print "                  used if snmp_user and snmp_pass are configured."
-    print "snmp_port       : Port used for SNMP connection to the Nexenta. Defaults to"
-    print "                  standard SNMP port (161) if not set."
-    print "snmp_extend     : If set to ON, query SNMP extend for data. SNMP extend on a"
-    print "                  Nexenta can be multiple scripts. Each line of output from a"
-    print "                  extend script must start with PERFDATA: followed by any"
-    print "                  performance data you wish to collect, or OUTPUT: followed"
-    print "                  by either WARNING or CRITICAL and the message to report."
-    print "                  Two examples of output extend scripts could generate:"
-    print "                  PERFDATA:'ARC hit'=75% 'ARC miss'=17%"
-    print "                  OUTPUT:WARNING: ARC hit ratio below 80%!"
-    print "skip_trigger    : If set to ON, do not check fault triggers. Usefull to "
-    print "                  prevent double fault reporting when checking a virtual node"
-    print "                  of a Nexenta HA cluster."
-    print "skip_folderperf : If set to ON, do not return performance data for folders."
-    print "                  Usefull to prevent double performance reporting when checking"
-    print "                  a virtual node of a Nexenta HA cluster."
-    print "space_threshold : Thresholds for the folder space usage check. Can be multiple"
-    print "                  lines formatted as <folder>;<vol-warning>;<vol-critical>;"
-    print "                  <snap-warning>;<snap-critical>."
-    print "                  <folder> can be a specific volume or DEFAULT."
-    print "                  Volume thresholds can be a percentage of space used(%),"
-    print "                  amount of free space([M,G,T]) or IGNORE."
-    print "                  Snapshot thresholds can be a percentage of space used(%),"
-    print "                  amount of space used([M,G,T]) or IGNORE."
-    print "                  DEFAULT thresholds are applied to all folders not specified."
-    print "nms_retry       : Sets the max number of retries when NMS is unresponsive."
-    print "                  Defaults to 2 if not set."
-    print "[known_errors]  : Convert severity and/or description of known error messages."
-    print "                  Can consist of multiple error messages formatted as"
-    print "                  <error message> = <severity>;<description>."
-    print "                  <error message> can be a part of a error message or DEFAULT."
-    print "                  <severity> can be DEFAULT,WARNING,CRITICAL,UNKNOWN or IGNORE"
-    print "                  DEFAULT severity does not change the original severity level."
-    print "                  If IGNORE is set as severity the entire message is ignored."
-    print "                  <description> is the description to which the error message"
-    print "                  will be changed. It is possible to set <severity> but not"
-    print "                  <description>. If no match is found the DEFAULT description"
-    print "                  will be appended to the orignial error message(if a DEFAULT"
-    print "                  has been configured)."
+    print("""usage: check_nexenta.py -H <arg> [options]
+Options and arguments (defaults to [-D, -T] if only -H is given):
+-H arg : Nexenta to check. Can be hostname or IP adress. Must be configured in
+         the config file. Short for --hostname.
+-D     : Check space usage of volumes. Thresholds are configured in the config
+         file.
+-T     : Check fault triggers.
+-P     : Report SNMP performance data. Must be configured in the config file.
+         Reports data for CPU, Disk, Snapshot, Memory and Network.
+-E     : Report SNMP extend data. Must be configured in the config file.
+       : See help below on snmp_extend for more info.
+-f     : Config file to use. Defaults to <scriptname>.cfg if not given.
+-V     : Show version information. Short for --version.
+-h     : Show help information. Short for --help.
+
+Config file sections and options:
+[<hostname>]    : Nexenta to check. Should match argument passed to -H.
+                  Config file can contain multiple sections of [<hostname>].
+api_user        : Username which has API rights on the Nexenta
+api_pass        : Password for the user with API rights.
+api_ssl         : Use HTTP-SSL (https://) for connection.
+api_port        : Port used for API connection to the Nexenta. Defaults to
+                  standard NMV port (2000) if not set.
+snmp_user       : SNMP username with ro rights on the Nexenta. Only needed
+                  for SNMP v3.
+snmp_pass       : Password for the SNMP user. Only needed for SNMP v3.
+snmp_community  : SNMP ro community. Only needed for SNMP v2. Will not be
+                  used if snmp_user and snmp_pass are configured.
+snmp_port       : Port used for SNMP connection to the Nexenta. Defaults to
+                  standard SNMP port (161) if not set.
+snmp_extend     : If set to ON, query SNMP extend for data. SNMP extend on a
+                  Nexenta can be multiple scripts. Each line of output from a
+                  extend script must start with PERFDATA: followed by any
+                  performance data you wish to collect, or OUTPUT: followed
+                  by either WARNING or CRITICAL and the message to report.
+                  Two examples of output extend scripts could generate:
+                  PERFDATA:'ARC hit'=75% 'ARC miss'=17%
+                  OUTPUT:WARNING: ARC hit ratio below 80%!
+skip_trigger    : If set to ON, do not check fault triggers. Usefull to 
+                  prevent double fault reporting when checking a virtual node
+                  of a Nexenta HA cluster.
+skip_folderperf : If set to ON, do not return performance data for folders.
+                  Usefull to prevent double performance reporting when checking
+                  a virtual node of a Nexenta HA cluster.
+space_threshold : Thresholds for the folder space usage check. Can be multiple
+                  lines formatted as <folder>;<vol-warning>;<vol-critical>;
+                  <snap-warning>;<snap-critical>.
+                  <folder> can be a specific volume or DEFAULT.
+                  Volume thresholds can be a percentage of space used(%),
+                  amount of free space([M,G,T]) or IGNORE.
+                  Snapshot thresholds can be a percentage of space used(%),
+                  amount of space used([M,G,T]) or IGNORE.
+                  DEFAULT thresholds are applied to all folders not specified.
+nms_retry       : Sets the max number of retries when NMS is unresponsive.
+                  Defaults to 2 if not set.
+[known_errors]  : Convert severity and/or description of known error messages.
+                  Can consist of multiple error messages formatted as
+                  <error message> = <severity>;<description>.
+                  <error message> can be a part of a error message or DEFAULT.
+                  <severity> can be DEFAULT,WARNING,CRITICAL,UNKNOWN or IGNORE
+                  DEFAULT severity does not change the original severity level.
+                  If IGNORE is set as severity the entire message is ignored.
+                  <description> is the description to which the error message
+                  will be changed. It is possible to set <severity> but not
+                  <description>. If no match is found the DEFAULT description
+                  will be appended to the orignial error message(if a DEFAULT
+                  has been configured).""")
     sys.exit()
 
 
 def print_version():
-    print 'Version 1.0.14'
+    print('Version 1.0.14')
     sys.exit()
 
 
 if __name__ == '__main__':
-    print main(sys.argv[1:])
+    print(main(sys.argv[1:]))
     sys.exit(NagiosStates.RC)
