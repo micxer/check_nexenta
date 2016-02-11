@@ -80,9 +80,12 @@ class NagiosStates:
     CRITICAL = 2
     UNKNOWN = 3
 
+    def __init__(self):
+        pass
+
     # Only change RC if greater than previous value, with exceptions for state UNKNOWN.
     def __setattr__(self, name, value):
-        if (name == "RC"):
+        if name == 'RC':
             if (value != NagiosStates.UNKNOWN) and (NagiosStates.RC < value or NagiosStates.RC == NagiosStates.UNKNOWN):
                 NagiosStates.__dict__[name] = value
             elif (value == NagiosStates.UNKNOWN) and (NagiosStates.RC == NagiosStates.OK):
@@ -90,11 +93,15 @@ class NagiosStates:
 
 
 class ReadConfig:
+    def __init__(self):
+        pass
+
     # Check configfile for path, append script path if no path was given.
     # Default to <scriptname>.cfg if no configfile was given.
-    def open_config(self, configfile):
+    @staticmethod
+    def open_config(configfile):
         if not configfile:
-            configfile = os.path.splitext(os.path.abspath(__file__))[0] + ".cfg"
+            configfile = os.path.splitext(os.path.abspath(__file__))[0] + '.cfg'
         elif not os.path.dirname(configfile):
             configfile = os.path.join(os.path.dirname(__file__), configfile)
 
@@ -105,7 +112,8 @@ class ReadConfig:
             raise CritError("Can not open configuration file: %s" % configfile)
 
     # Get values from the config file.
-    def get_option(self, section, option):
+    @staticmethod
+    def get_option(section, option):
         try:
             return ReadConfig.parse.get(section, option)
         except ConfigParser.NoOptionError:
@@ -133,55 +141,56 @@ class NexentaApi:
             raise CritError("No connection info configured for %s" % nexenta['hostname'])
         if not self.nms_retry:
             self.nms_retry = 2
-        
+
         ssl = cfg.get_option(nexenta['hostname'], 'api_ssl')
-        if ssl != "ON":
+        if ssl != 'ON':
             protocol = 'http'
         else:
             protocol = 'https'
-            
+
         port = cfg.get_option(nexenta['hostname'], 'api_port')
         if not port:
             port = 2000
 
         self.base64_string = base64.encodestring('%s:%s' % (username, password))[:-1]
-        self.url = '%s://%s:%s/rest/nms/ <%s://%s:%s/rest/nms/>' % (protocol, nexenta['ip'], port, protocol, 
+        self.url = "%s://%s:%s/rest/nms/ <%s://%s:%s/rest/nms/>" % (protocol, nexenta['ip'], port, protocol,
                                                                     nexenta['ip'], port)
 
     # Build the request and return the response.
-    def get_data(self, obj, meth, par):
-        data = {'object': obj, 'method': meth, 'params': par}
+    def get_data(self, obj, method, params):
+        data = {'object': obj, 'method': method, 'params': params}
         data = json.dumps(data)
         request = urllib2.Request(self.url, data)
-        request.add_header('Authorization', 'Basic %s' % self.base64_string)
-        request.add_header('Content-Type' , 'application/json')
+        request.add_header('Authorization', "Basic %s" % self.base64_string)
+        request.add_header('Content-Type', 'application/json')
 
         # Try to connect max <nms_retry> times. Sleep 20 seconds if NMS connection error occurs.
         tries = int(self.nms_retry)
         while tries:
             try:
                 response = json.loads(urllib2.urlopen(request).read())
-                if response['error'] and "Cannot introspect object com.nexenta.nms" in response['error']['message']:
-                    raise Exception("NMS unresponsive")
+                if response['error']:
+                    if 'Cannot introspect object com.nexenta.nms' in response['error']['message']:
+                        raise Exception('NMS unresponsive')
+
+                    raise CritError("API error occured: %s" % response['error'])
+
                 break
             except (urllib2.URLError, Exception):
                 tries += -1
                 time.sleep(20)
 
         if not tries:
-            raise CritError("Unable to connect to API at %s" % (self.url))
+            raise CritError("Unable to connect to API at %s" % self.url)
 
-        if response['error']:
-            raise CritError("API error occured: %s" % response['error'])
-        else:
-            return response['result']
+        return response['result']
 
 
 class SnmpRequest:
     # Read config file and build the NDMP session.
     def __init__(self, nexenta):
         cfg = ReadConfig()
-        
+
         username = cfg.get_option(nexenta['hostname'], 'snmp_user')
         password = cfg.get_option(nexenta['hostname'], 'snmp_pass')
         community = cfg.get_option(nexenta['hostname'], 'snmp_community')
@@ -191,12 +200,12 @@ class SnmpRequest:
 
         # If username/password use SNMP v3, else use SNMP v2.
         if username and password:
-            self.session = netsnmp.Session(DestHost='%s:%s' % (nexenta['ip'], port), Version=3, SecLevel='authNoPriv',
-                                           AuthProto='MD5', AuthPass=password, SecName=username)            
+            self.session = netsnmp.Session(DestHost="%s:%s" % (nexenta['ip'], port), Version=3, SecLevel='authNoPriv',
+                                           AuthProto='MD5', AuthPass=password, SecName=username)
         elif community:
-            self.session = netsnmp.Session(DestHost='%s:%s' % (nexenta['ip'], port), Version=2, Community=community)
+            self.session = netsnmp.Session(DestHost="%s:%s" % (nexenta['ip'], port), Version=2, Community=community)
         else:
-             raise CritError("Incorrect SNMP info configured for %s" % nexenta['hostname'])
+            raise CritError("Incorrect SNMP info configured for %s" % nexenta['hostname'])
 
     # Return the SNMP get value.
     def get_snmp(self, oid):
@@ -219,9 +228,9 @@ class SnmpRequest:
 
 # Convert human readable to real numbers.
 def convert_space(size):
-    size_types = { "B": 1, "K": 1024, "M": 1048576, "G": 1073741824, "T": 1099511627776 }
+    size_types = {'B': 1, 'K': 1024, 'M': 1048576, 'G': 1073741824, 'T': 1099511627776}
     try:
-        return (float(size[:-1]) * int(size_types[size[-1:]]))
+        return float(size[:-1]) * int(size_types[size[-1:]])
     except (KeyError, ValueError):
         return 0
 
@@ -231,7 +240,7 @@ def known_errors(result):
     cfg = ReadConfig()
     severity = []
     description = []
-    
+
     # Check if part of the message matches a string in the config file.
     known_error = cfg.known_errors(result['description'])
     if known_error:
@@ -240,13 +249,13 @@ def known_errors(result):
             severity, description = known_error.split(';')
         except ValueError:
             raise CritError("Error in config file at [known_errors], line: %s" % known_error)
-        
-        if not severity.upper() in ("DEFAULT", "WARNING", "CRITICAL", "UNKNOWN", "IGNORE"):
+
+        if not severity.upper() in ('DEFAULT', 'WARNING', 'CRITICAL', 'UNKNOWN', 'IGNORE'):
             raise CritError("Invalid severity in config file at [known_errors], line: %s" % known_error)
 
     if not description:
         # No match found or only severity match found, append default if defined in the config file.
-        default = cfg.get_option('known_errors', "DEFAULT")
+        default = cfg.get_option('known_errors', 'DEFAULT')
         if default:
             # Get the default description and append it
             try:
@@ -254,7 +263,7 @@ def known_errors(result):
             except ValueError:
                 raise CritError("Error in config file at [known_errors], line: %s" % default)
             description = "%s %s" % (result['description'], description)
-            
+
             # Get the default severity if there was no match in the config file
             if not severity:
                 try:
@@ -266,7 +275,7 @@ def known_errors(result):
             description = result['description']
 
     # If default or no match, pass the original severity
-    if not severity or severity.upper() == "DEFAULT":
+    if not severity or severity.upper() == 'DEFAULT':
         severity = result['severity']
 
     return severity.upper(), description
@@ -284,12 +293,12 @@ def check_spaceusage(nexenta):
         rc = NagiosStates()
 
         # Get a list of all volumes and add syspool.
-        volumes = api.get_data(obj='folder', meth='get_names', par=[''])
+        volumes = api.get_data(obj='folder', method='get_names', params=[''])
         volumes.extend(["syspool"])
 
         for vol in volumes:
             # Skip this volume if no match and no default in thresholds.
-            if not vol + ";" in thresholds and not "DEFAULT;" in thresholds:
+            if not (vol + ';' in thresholds or 'DEFAULT;' in thresholds):
                 continue
 
             for threshold in thresholds.split('\n'):
@@ -298,20 +307,21 @@ def check_spaceusage(nexenta):
 
                 # Check/extend the thresholds.
                 if len(threshold.split(';')) == 3:
-                    threshold += ";IGNORE;IGNORE"
+                    threshold += ';IGNORE;IGNORE'
                 elif len(threshold.split(';')) != 5:
-                    raise CritError("Error in config file at [%s]:space_threshold, line %s" % (nexenta['hostname'], threshold))
+                    raise CritError(
+                            "Error in config file at [%s]:space_threshold, line %s" % (nexenta['hostname'], threshold))
 
                 # Get the thresholds, or fall back to the default tresholds.
-                if vol + ";" in thresholds:
+                if vol + ';' in thresholds:
                     if threshold.split(';')[0] == vol:
                         volwarn, volcrit, snapwarn, snapcrit = threshold.split(';')[1:]
-                elif "DEFAULT;" in thresholds:
-                    if threshold.split(';')[0] == "DEFAULT":
+                elif 'DEFAULT;' in thresholds:
+                    if threshold.split(';')[0] == 'DEFAULT':
                         volwarn, volcrit, snapwarn, snapcrit = threshold.split(';')[1:]
 
             # Get volume properties.
-            volprops = api.get_data(obj='folder', meth='get_child_props', par=[vol, ''])
+            volprops = api.get_data(obj='folder', method='get_child_props', params=[vol, ''])
 
             # Get used/available space.
             available = volprops.get('available')
@@ -329,8 +339,8 @@ def check_spaceusage(nexenta):
                         rc.RC = NagiosStates.WARNING
                         snaperror = "WARNING: %s%% of %s used by snaphots" % (int(snapusedprc), vol)
                 elif convert_space(snapwarn) <= convert_space(snapused):
-                        rc.RC = NagiosStates.WARNING
-                        snaperror = "WARNING: %s of %s used by snaphots" % (snapused, vol)
+                    rc.RC = NagiosStates.WARNING
+                    snaperror = "WARNING: %s of %s used by snaphots" % (snapused, vol)
 
             if snapcrit[:-1].isdigit():
                 if '%' in snapcrit:
@@ -338,8 +348,8 @@ def check_spaceusage(nexenta):
                         rc.RC = NagiosStates.CRITICAL
                         snaperror = "CRITICAL: %s%% of %s used by snaphots" % (int(snapusedprc), vol)
                 elif convert_space(snapcrit) <= convert_space(snapused):
-                        rc.RC = NagiosStates.CRITICAL
-                        snaperror = "CRITICAL: %s of %s used by snaphots" % (snapused, vol)
+                    rc.RC = NagiosStates.CRITICAL
+                    snaperror = "CRITICAL: %s of %s used by snaphots" % (snapused, vol)
 
             if snaperror:
                 errors.append(snaperror)
@@ -365,7 +375,7 @@ def check_spaceusage(nexenta):
                     rc.RC = NagiosStates.WARNING
                     errors.append("WARNING: %s %s available" % (vol, available))
 
-    return (errors)
+    return errors
 
 
 # Check Nexenta runners for faults.
@@ -376,29 +386,29 @@ def check_triggers(nexenta):
 
     # Check all triggers, if skip_triggers is not set to 'on' in the config file.
     skip = cfg.get_option(nexenta['hostname'], 'skip_trigger')
-    if skip != "ON":
+    if skip != 'ON':
         api = NexentaApi(nexenta)
 
-        triggers = api.get_data(obj='reporter', meth='get_names_by_prop', par=['type', 'trigger', ''])
+        triggers = api.get_data(obj='reporter', method='get_names_by_prop', params=['type', 'trigger', ''])
         for trigger in triggers:
-            results = api.get_data(obj='trigger', meth='get_faults', par=[trigger])
+            results = api.get_data(obj='trigger', method='get_faults', params=[trigger])
             for result in results:
                 result = results[result]
 
                 # Convert severity/description.
                 severity, description = known_errors(result)
                 # Only append if severity is not 'IGNORE'
-                if not severity == "IGNORE":
-                    if severity == "CRITICAL":
+                if not severity == 'IGNORE':
+                    if severity == 'CRITICAL':
                         rc.RC = NagiosStates.CRITICAL
-                    elif severity == "UNKNOWN": 
+                    elif severity == 'UNKNOWN':
                         rc.RC = NagiosStates.UNKNOWN
                     else:
                         rc.RC = NagiosStates.WARNING
-                    
+
                     errors.append("%s:%s: %s" % (trigger, severity, description))
 
-    return (errors)
+    return errors
 
 
 # Get snmp extend data and write to Output and/or Perfdata.
@@ -410,13 +420,13 @@ def collect_extends(nexenta):
 
     # Collect snmp extend data, if snmp_extend is configured in the config file for this Nexenta.
     extend = cfg.get_option(nexenta['hostname'], 'snmp_extend')
-    if extend == "ON":
+    if extend == 'ON':
         # Check for dependancy net-snmp-python.
         try:
             netsnmp
         except NameError:
             rc.RC = NagiosStates.WARNING
-            return ("WARNING: net-snmp-python not available, SNMP Extend Data will be skipped.", "")
+            return 'WARNING: net-snmp-python not available, SNMP Extend Data will be skipped.', ""
         else:
             snmp = SnmpRequest(nexenta)
 
@@ -424,17 +434,17 @@ def collect_extends(nexenta):
         extends = snmp.walk_snmp('NET-SNMP-EXTEND-MIB::nsExtendOutLine')
         if extends:
             for data in extends:
-                if "PERFDATA:" in data.val:
-                    perfdata.append(data.val.split("PERFDATA:")[1])
-                elif "OUTPUT:" in data.val:
-                    output.append(data.val.split("OUTPUT:")[1])
+                if 'PERFDATA:' in data.val:
+                    perfdata.append(data.val.split('PERFDATA:')[1])
+                elif 'OUTPUT:' in data.val:
+                    output.append(data.val.split('OUTPUT:')[1])
 
-                    if "CRITICAL" in data.val:
+                    if 'CRITICAL' in data.val:
                         rc.RC = NagiosStates.CRITICAL
-                    elif "WARNING" in data.val:
+                    elif 'WARNING' in data.val:
                         rc.RC = NagiosStates.WARNING
 
-    return (output, perfdata)
+    return output, perfdata
 
 
 # Collect Nexenta performance data.
@@ -451,7 +461,7 @@ def collect_perfdata(nexenta):
             netsnmp
         except NameError:
             rc.RC = NagiosStates.WARNING
-            output.append("WARNING: net-snmp-python not available, SNMP Performance Data will be skipped.")
+            output.append('WARNING: net-snmp-python not available, SNMP Performance Data will be skipped.')
         else:
             snmp = SnmpRequest(nexenta)
 
@@ -480,18 +490,18 @@ def collect_perfdata(nexenta):
 
         # Get perfdata for all volumes, or only for syspool if skip_folderperf is set to 'on'.
         skip = cfg.get_option(nexenta['hostname'], 'skip_folderperf')
-        if skip != "ON":
-            volumes.extend(api.get_data(obj='folder', meth='get_names', par=['']))
+        if skip != 'ON':
+            volumes.extend(api.get_data(obj='folder', method='get_names', params=['']))
 
-        volumes.extend(["syspool"])
+        volumes.extend(['syspool'])
 
         for vol in volumes:
             # Get volume properties.
-            volprops = api.get_data(obj='folder', meth='get_child_props', par=[vol, ''])
+            volprops = api.get_data(obj='folder', method='get_child_props', params=[vol, ''])
 
             # Get volume used, free and snapshot space.
             used = convert_space(volprops.get('used')) / 1024
-            free = convert_space(volprops.get('available')) /1024
+            free = convert_space(volprops.get('available')) / 1024
             snap = convert_space(volprops.get('usedbysnapshots')) / 1024
 
             perfdata.append("'/%s used'=%sKB" % (vol, int(used)))
@@ -500,52 +510,52 @@ def collect_perfdata(nexenta):
 
             # Get compression ratio, if compression is enabled.
             compression = volprops.get('compression')
-            if compression == "on":
+            if compression == 'on':
                 ratio = volprops.get('compressratio')
 
                 perfdata.append("'/%s compressratio'=%s" % (vol, ratio[:-1]))
 
         # Get memory used, free and paging.
-        memstats = api.get_data(obj='appliance', meth='get_memstat', par=[''])
+        memstats = api.get_data(obj='appliance', method='get_memstat', params=[''])
 
-        perfdata.append("'Memory free'=%sMB" % (memstats.get("ram_free")))
-        perfdata.append("'Memory used'=%sMB" % (memstats.get("ram_total") - memstats.get("ram_free")))
-        perfdata.append("'Memory paging'=%sMB" % (memstats.get("ram_paging")))
+        perfdata.append("'Memory free'=%sMB" % (memstats.get('ram_free')))
+        perfdata.append("'Memory used'=%sMB" % (memstats.get('ram_total') - memstats.get('ram_free')))
+        perfdata.append("'Memory paging'=%sMB" % (memstats.get('ram_paging')))
 
-    return (output, perfdata)
+    return output, perfdata
 
 
 # Main
 def main(argv):
     # Parse command line arguments.
     try:
-        opts, args = getopt.getopt(argv, "H:DTPEhVf:", ["hostname", "help", "version"])
+        opts, args = getopt.getopt(argv, 'H:DTPEhVf:', ['hostname', 'help', 'version'])
     except getopt.GetoptError:
-        raise CritError("Invalid arguments, usage: -H <hostname>, [-D(space usage)], "
-                        "[-T(triggers)], [-P(perfdata)], [-E(extends)], [-f(config file)], "
-                        "[-h(help)], [-V(version)]")
+        raise CritError('Invalid arguments, usage: -H <hostname>, [-D(space usage)], '
+                        '[-T(triggers)], [-P(perfdata)], [-E(extends)], [-f(config file)], '
+                        '[-h(help)], [-V(version)]')
 
     configfile = ""
     for opt, arg in opts:
-        if opt in ("-H", "--hostname"):
+        if opt in ('-H', '--hostname'):
             nexenta = arg
-        elif opt == "-f":
+        elif opt == '-f':
             configfile = arg
-        elif opt in ("-h", "--help"):
+        elif opt in ('-h', '--help'):
             print_usage()
-        elif opt in ("-V", "--version"):
+        elif opt in ('-V', '--version'):
             print_version()
 
     try:
-        nexenta = { 'hostname': nexenta, 'ip': socket.getaddrinfo(nexenta,None)[0][4][0] }
+        nexenta = {'hostname': nexenta, 'ip': socket.getaddrinfo(nexenta, None)[0][4][0]}
     except NameError:
-        raise CritError("Invalid arguments, no hostname specified!")
+        raise CritError('Invalid arguments, no hostname specified!')
     except socket.gaierror:
-        raise CritError("No IP address found for %s!" % nexenta)
-        
+        raise CritError('No IP address found for %s!' % nexenta)
+
     # If only -H is passed execute default checks.
     if len(opts) == 1:
-        opts.extend([("-D", ""), ("-T", "")])
+        opts.extend([('-D', ''), ['-T', '']])
 
     # Open the configfile for use and start the checks.
     cfg = ReadConfig()
@@ -554,24 +564,24 @@ def main(argv):
     output = []
     perfdata = []
     for opt, arg in opts:
-        if opt == "-D":
+        if opt == '-D':
             # Check spage usage.
             result = check_spaceusage(nexenta)
             if result:
                 output.extend(result)
-        elif opt == "-T":
+        elif opt == '-T':
             # Check fault triggers.
             result = check_triggers(nexenta)
             if result:
                 output.extend(result)
-        elif opt == "-E":
+        elif opt == '-E':
             # Run SNMP extend scripts and collect output/performance data.
             out, perf = collect_extends(nexenta)
             if out:
                 output.extend(out)
             if perf:
                 perfdata.extend(perf)
-        elif opt == "-P":
+        elif opt == '-P':
             # Collect performance data.
             out, perf = collect_perfdata(nexenta)
             if out:
@@ -580,13 +590,14 @@ def main(argv):
                 perfdata.extend(perf)
 
     if NagiosStates.RC == NagiosStates.OK:
-        output.append("Nexenta check OK")
+        output.append('Nexenta check OK')
 
     # Append performance data if collected and print output.
     if perfdata:
-        return "%s|%s" % ("<br>".join(output), " ".join(perfdata))
+        return '%s|%s' % ('<br>'.join(output), ' '.join(perfdata))
     else:
-        return ("<br>".join(output))
+        return '<br>'.join(output)
+
 
 def print_usage():
     print "usage: check_nexenta.py -H <arg> [options]"
@@ -658,9 +669,11 @@ def print_usage():
     print "                  has been configured)."
     sys.exit()
 
+
 def print_version():
-    print "Version 1.0.13"
+    print 'Version 1.0.14'
     sys.exit()
+
 
 if __name__ == '__main__':
     print main(sys.argv[1:])
