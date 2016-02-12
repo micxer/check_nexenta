@@ -56,6 +56,7 @@ import sys
 import urllib2
 import socket
 import time
+from datetime import datetime, timedelta
 
 try:
     import json
@@ -528,15 +529,53 @@ def collect_perfdata(nexenta):
     return output, perfdata
 
 
+# Check age of AutoSync snapshots
+def check_snapshot_age(nexenta):
+    cfg = ReadConfig()
+    rc = NagiosStates()
+    errors = []
+
+    max_age = int(cfg.get_option(nexenta['hostname'], 'snapshot_max_age'))
+
+    # Check all triggers, if skip_triggers is not set to 'on' in the config file.
+    api = NexentaApi(nexenta)
+
+    threshold_time = datetime.now() - timedelta(hours=max_age)
+
+    snapshots = api.get_data(obj='snapshot', method='get_names', params=['AutoSync'])
+
+    if not snapshots:
+        rc.RC = NagiosStates.CRITICAL
+        errors.append('CRITICAL: No AutoSync snapshots found')
+
+        return errors
+
+    newest_snapshot_info = {'timestamp': None, 'name': ''}
+
+    for snapshot in snapshots:
+        result = api.get_data(obj='snapshot', method='get_child_props', params=[snapshot, ''])
+
+        timestamp = datetime.fromtimestamp(float(result['creation_seconds']))
+        if not newest_snapshot_info['timestamp'] or newest_snapshot_info['timestamp'] < timestamp:
+            newest_snapshot_info = {'timestamp': timestamp, 'name': result['name']}
+
+    if newest_snapshot_info['timestamp'] < threshold_time:
+        rc.RC = NagiosStates.CRITICAL
+        errors.append(
+            '%s: Snapshot "%s" is older than %d hours' % ('CRITICAL', newest_snapshot_info['name'], max_age))
+
+    return errors
+
+
 # Main
 def main(argv):
     # Parse command line arguments.
     try:
-        opts, args = getopt.getopt(argv, 'H:DTPEhVf:', ['hostname', 'help', 'version'])
+        opts, args = getopt.getopt(argv, 'H:DTPEhVf:S', ['hostname', 'help', 'version'])
     except getopt.GetoptError:
         raise CritError('Invalid arguments, usage: -H <hostname>, [-D(space usage)], '
                         '[-T(triggers)], [-P(perfdata)], [-E(extends)], [-f(config file)], '
-                        '[-h(help)], [-V(version)]')
+                        '[-h(help)], [-V(version)], [-S(autosync)]')
 
     configfile = ""
     for opt, arg in opts:
@@ -591,6 +630,11 @@ def main(argv):
                 output.extend(out)
             if perf:
                 perfdata.extend(perf)
+        elif opt == '-S':
+            # Check age of autosync snapshots.
+            result = check_snapshot_age(nexenta)
+            if result:
+                output.extend(result)
 
     if NagiosStates.RC == NagiosStates.OK:
         output.append('Nexenta check OK')
@@ -610,6 +654,7 @@ Options and arguments (defaults to [-D, -T] if only -H is given):
 -D     : Check space usage of volumes. Thresholds are configured in the config
          file.
 -T     : Check fault triggers.
+-S     : Check age of AutoSync snapshots.
 -P     : Report SNMP performance data. Must be configured in the config file.
          Reports data for CPU, Disk, Snapshot, Memory and Network.
 -E     : Report SNMP extend data. Must be configured in the config file.
@@ -674,7 +719,7 @@ nms_retry       : Sets the max number of retries when NMS is unresponsive.
 
 
 def print_version():
-    print('Version 1.0.14')
+    print('Version 1.1.0')
     sys.exit()
 
 
