@@ -21,10 +21,10 @@ import ConfigParser
 import base64
 import argparse
 import os
-import sys
 import urllib2
 import socket
 import time
+import pynag
 from datetime import datetime, timedelta
 
 try:
@@ -40,27 +40,8 @@ except ImportError:
 
 class CritError(Exception):
     def __init__(self, message):
-        print("CRITICAL: %s" % message)
-        sys.exit(NagiosStates.CRITICAL)
-
-
-class NagiosStates:
-    RC = 0
-    OK = 0
-    WARNING = 1
-    CRITICAL = 2
-    UNKNOWN = 3
-
-    def __init__(self):
-        pass
-
-    # Only change RC if greater than previous value, with exceptions for state UNKNOWN.
-    def __setattr__(self, name, value):
-        if name == 'RC':
-            if (value != NagiosStates.UNKNOWN) and (NagiosStates.RC < value or NagiosStates.RC == NagiosStates.UNKNOWN):
-                NagiosStates.__dict__[name] = value
-            elif (value == NagiosStates.UNKNOWN) and (NagiosStates.RC == NagiosStates.OK):
-                NagiosStates.__dict__[name] = value
+        plugin = pynag.Plugins.PluginHelper()
+        plugin.exit(exit_code=pynag.Plugins.critical, long_output="CRITICAL: %s" % message)
 
 
 class Configuration:
@@ -141,15 +122,13 @@ class NexentaApi:
 
                     raise CritError("API error occured: %s" % response['error'])
 
-                break
+                return response['result']
+
             except (urllib2.URLError, Exception):
                 tries += -1
                 time.sleep(20)
 
-        if not tries:
-            raise CritError("Unable to connect to API at %s" % self.url)
-
-        return response['result']
+        raise CritError("Unable to connect to API at %s" % self.url)
 
 
 class SnmpRequest:
@@ -248,15 +227,13 @@ def known_errors(result):
 
 
 # Check volume space usage.
-def check_spaceusage(nexenta):
+def check_spaceusage(nexenta, plugin):
     cfg = Configuration()
-    errors = []
 
     # Only check space usage if space thresholds are configured in the config file.
     thresholds = cfg.get_option(nexenta['hostname'], 'space_threshold')
     if thresholds:
         api = NexentaApi(nexenta)
-        rc = NagiosStates()
 
         # Get a list of all volumes and add syspool.
         volumes = api.get_data(obj='folder', method='get_names', params=[''])
@@ -298,57 +275,49 @@ def check_spaceusage(nexenta):
             volusedprc = (volused / (volused + convert_space(available))) * 100
 
             # Check if a snapshot threshold has been met.
-            snaperror = ""
             if snapwarn[:-1].isdigit():
                 if '%' in snapwarn:
                     if int(snapwarn[:-1]) <= snapusedprc:
-                        rc.RC = NagiosStates.WARNING
-                        snaperror = "WARNING: %s%% of %s used by snaphots" % (int(snapusedprc), vol)
+                        plugin.add_status('warning')
+                        plugin.add_long_output("WARNING: %s%% of %s used by snaphots" % (int(snapusedprc), vol))
                 elif convert_space(snapwarn) <= convert_space(snapused):
-                    rc.RC = NagiosStates.WARNING
-                    snaperror = "WARNING: %s of %s used by snaphots" % (snapused, vol)
+                    plugin.add_status('warning')
+                    plugin.add_long_output("WARNING: %s of %s used by snaphots" % (snapused, vol))
 
             if snapcrit[:-1].isdigit():
                 if '%' in snapcrit:
                     if int(snapcrit[:-1]) <= snapusedprc:
-                        rc.RC = NagiosStates.CRITICAL
-                        snaperror = "CRITICAL: %s%% of %s used by snaphots" % (int(snapusedprc), vol)
+                        plugin.add_status('critical')
+                        plugin.add_long_output("CRITICAL: %s%% of %s used by snaphots" % (int(snapusedprc), vol))
                 elif convert_space(snapcrit) <= convert_space(snapused):
-                    rc.RC = NagiosStates.CRITICAL
-                    snaperror = "CRITICAL: %s of %s used by snaphots" % (snapused, vol)
-
-            if snaperror:
-                errors.append(snaperror)
+                    plugin.add_status('critical')
+                    plugin.add_long_output("CRITICAL: %s of %s used by snaphots" % (snapused, vol))
 
             # Check if a folder threshold has been met.
             if volcrit[:-1].isdigit():
                 if '%' in volcrit:
                     if int(volcrit[:-1]) <= volusedprc:
-                        rc.RC = NagiosStates.CRITICAL
-                        errors.append("CRITICAL: %s %s%% full!" % (vol, int(volusedprc)))
+                        plugin.add_status('critical')
+                        plugin.add_long_output("CRITICAL: %s %s%% full!" % (vol, int(volusedprc)))
                         continue
                 elif convert_space(volcrit) >= convert_space(available):
-                    rc.RC = NagiosStates.CRITICAL
-                    errors.append("CRITICAL: %s %s available!" % (vol, available))
+                    plugin.add_status('critical')
+                    plugin.add_long_output("CRITICAL: %s %s available!" % (vol, available))
                     continue
 
             if volwarn[:-1].isdigit():
                 if '%' in volwarn:
                     if int(volwarn[:-1]) <= volusedprc:
-                        rc.RC = NagiosStates.WARNING
-                        errors.append("WARNING: %s %s%% full" % (vol, int(volusedprc)))
+                        plugin.add_status('warning')
+                        plugin.add_long_output("WARNING: %s %s%% full" % (vol, int(volusedprc)))
                 elif convert_space(volwarn) >= convert_space(available):
-                    rc.RC = NagiosStates.WARNING
-                    errors.append("WARNING: %s %s available" % (vol, available))
-
-    return errors
+                    plugin.add_status('warning')
+                    plugin.add_long_output("WARNING: %s %s available" % (vol, available))
 
 
 # Check Nexenta runners for faults.
-def check_triggers(nexenta):
+def check_triggers(nexenta, plugin):
     cfg = Configuration()
-    rc = NagiosStates()
-    errors = []
 
     # Check all triggers, if skip_triggers is not set to 'on' in the config file.
     skip = cfg.get_option(nexenta['hostname'], 'skip_trigger')
@@ -366,23 +335,18 @@ def check_triggers(nexenta):
                 # Only append if severity is not 'IGNORE'
                 if not severity == 'IGNORE':
                     if severity == 'CRITICAL':
-                        rc.RC = NagiosStates.CRITICAL
+                        plugin.add_status('critical')
                     elif severity == 'UNKNOWN':
-                        rc.RC = NagiosStates.UNKNOWN
+                        plugin.add_status('unknown')
                     else:
-                        rc.RC = NagiosStates.WARNING
+                        plugin.add_status('warning')
 
-                    errors.append("%s:%s: %s" % (trigger, severity, description))
-
-    return errors
+                    plugin.add_long_output("%s:%s: %s" % (trigger, severity, description))
 
 
 # Get snmp extend data and write to Output and/or Perfdata.
-def collect_extends(nexenta):
+def collect_extends(nexenta, plugin):
     cfg = Configuration()
-    rc = NagiosStates()
-    output = []
-    perfdata = []
 
     # Collect snmp extend data, if snmp_extend is configured in the config file for this Nexenta.
     extend = cfg.get_option(nexenta['hostname'], 'snmp_extend')
@@ -391,8 +355,9 @@ def collect_extends(nexenta):
         try:
             netsnmp
         except NameError:
-            rc.RC = NagiosStates.WARNING
-            return 'WARNING: net-snmp-python not available, SNMP Extend Data will be skipped.', ""
+            plugin.add_status('warning')
+            plugin.add_long_output('WARNING: net-snmp-python not available, SNMP Extend Data will be skipped.')
+            return
         else:
             snmp = SnmpRequest(nexenta)
 
@@ -401,24 +366,19 @@ def collect_extends(nexenta):
         if extends:
             for data in extends:
                 if 'PERFDATA:' in data.val:
-                    perfdata.append(data.val.split('PERFDATA:')[1])
+                    plugin.add_metric(perfdatastring=data.val.split('PERFDATA:')[1])
                 elif 'OUTPUT:' in data.val:
-                    output.append(data.val.split('OUTPUT:')[1])
+                    plugin.add_metric(perfdatastring=data.val.split('OUTPUT:')[1])
 
                     if 'CRITICAL' in data.val:
-                        rc.RC = NagiosStates.CRITICAL
+                        plugin.add_status('critical')
                     elif 'WARNING' in data.val:
-                        rc.RC = NagiosStates.WARNING
-
-    return output, perfdata
+                        plugin.add_status('warning')
 
 
 # Collect Nexenta performance data.
-def collect_perfdata(nexenta):
+def collect_perfdata(nexenta, plugin):
     cfg = Configuration()
-    rc = NagiosStates()
-    perfdata = []
-    output = []
 
     # Collect SNMP performance data, if snmp is configured in the config file for this Nexenta.
     if cfg.get_option(nexenta['hostname'], 'snmp_user') or cfg.get_option(nexenta['hostname'], 'snmp_community'):
@@ -426,8 +386,8 @@ def collect_perfdata(nexenta):
         try:
             netsnmp
         except NameError:
-            rc.RC = NagiosStates.WARNING
-            output.append('WARNING: net-snmp-python not available, SNMP Performance Data will be skipped.')
+            plugin.add_status('warning')
+            plugin.add_long_output('WARNING: net-snmp-python not available, SNMP Performance Data will be skipped.')
         else:
             snmp = SnmpRequest(nexenta)
 
@@ -435,7 +395,7 @@ def collect_perfdata(nexenta):
             cpu_info = snmp.walk_snmp('HOST-RESOURCES-MIB::hrProcessorLoad')
             if cpu_info:
                 for cpu_id, cpu_load in enumerate(cpu_info):
-                    perfdata.append("'CPU%s used'=%s%%" % (cpu_id, cpu_load.val))
+                    plugin.add_metric(label="CPU%s used" % cpu_id, value="%s%%" % cpu_load.val)
 
             # Get Network Traffic.
             interfaces = snmp.walk_snmp('IF-MIB::ifName')
@@ -446,8 +406,8 @@ def collect_perfdata(nexenta):
                     intraffic = int(intraffic) * 8
                     outtraffic = int(outtraffic) * 8
 
-                    perfdata.append("'%s Traffic in'=%sc" % (interface.val, intraffic))
-                    perfdata.append("'%s Traffic out'=%sc" % (interface.val, outtraffic))
+                    plugin.add_metric(label="%s Traffic in" % interface.val, value="%sc" % intraffic)
+                    plugin.add_metric(label="%s Traffic out" % interface.val, value="%sc" % outtraffic)
 
     # Collect API performance data, if api is configured in the config file for this Nexenta.
     if cfg.get_option(nexenta['hostname'], 'api_user') and cfg.get_option(nexenta['hostname'], 'api_pass'):
@@ -470,32 +430,28 @@ def collect_perfdata(nexenta):
             free = convert_space(volprops.get('available')) / 1024
             snap = convert_space(volprops.get('usedbysnapshots')) / 1024
 
-            perfdata.append("'/%s used'=%sKB" % (vol, int(used)))
-            perfdata.append("'/%s free'=%sKB" % (vol, int(free)))
-            perfdata.append("'/%s snapshots'=%sKB" % (vol, int(snap)))
+            plugin.add_metric(label="/%s used" % vol, value="%sKB" % int(used))
+            plugin.add_metric(label="/%s free" % vol, value="%sKB" % int(free))
+            plugin.add_metric(label="/%s snapshot" % vol, value="%sKB" % int(snap))
 
             # Get compression ratio, if compression is enabled.
             compression = volprops.get('compression')
             if compression == 'on':
                 ratio = volprops.get('compressratio')
 
-                perfdata.append("'/%s compressratio'=%s" % (vol, ratio[:-1]))
+                plugin.add_metric(label="/%s compressratio" % vol, value="%s" % ratio[:-1])
 
         # Get memory used, free and paging.
         memstats = api.get_data(obj='appliance', method='get_memstat', params=[''])
 
-        perfdata.append("'Memory free'=%sMB" % (memstats.get('ram_free')))
-        perfdata.append("'Memory used'=%sMB" % (memstats.get('ram_total') - memstats.get('ram_free')))
-        perfdata.append("'Memory paging'=%sMB" % (memstats.get('ram_paging')))
-
-    return output, perfdata
+        plugin.add_metric(label="Memory free", value="%sMB" % int(memstats.get('ram_free')))
+        plugin.add_metric(label="Memory used", value="%sMB" % (memstats.get('ram_total') - memstats.get('ram_free')))
+        plugin.add_metric(label="Memory paging", value="%sMB" % memstats.get('ram_paging'))
 
 
 # Check age of AutoSync snapshots
-def check_snapshot_age(nexenta):
+def check_snapshot_age(nexenta, plugin):
     cfg = Configuration()
-    rc = NagiosStates()
-    errors = []
 
     max_age = int(cfg.get_option(nexenta['hostname'], 'snapshot_max_age'))
 
@@ -507,10 +463,10 @@ def check_snapshot_age(nexenta):
     snapshots = api.get_data(obj='snapshot', method='get_names', params=['AutoSync'])
 
     if not snapshots:
-        rc.RC = NagiosStates.CRITICAL
-        errors.append('CRITICAL: No AutoSync snapshots found')
+        plugin.add_status('critical')
+        plugin.add_long_output('CRITICAL: No AutoSync snapshots found')
 
-        return errors
+        return
 
     newest_snapshot_info = {'timestamp': None, 'name': ''}
 
@@ -522,11 +478,10 @@ def check_snapshot_age(nexenta):
             newest_snapshot_info = {'timestamp': timestamp, 'name': result['name']}
 
     if newest_snapshot_info['timestamp'] < threshold_time:
-        rc.RC = NagiosStates.CRITICAL
-        errors.append(
-            '%s: Snapshot "%s" is older than %d hours' % ('CRITICAL', newest_snapshot_info['name'], max_age))
-
-    return errors
+        plugin.add_status('critical')
+        plugin.add_long_output(
+            '%s: Snapshot "%s" is older than %d hours' % ('CRITICAL', newest_snapshot_info['name'], max_age)
+        )
 
 
 def main():
@@ -602,48 +557,28 @@ def main():
     cfg = Configuration()
     cfg.open_config(arguments.configfile)
 
-    output = []
-    perfdata = []
+    now = datetime.now()
+    plugin = pynag.Plugins.PluginHelper()
+    plugin.add_summary("Last check: {}".format(now))
+    plugin.add_status('ok')
 
     if arguments.space_usage:
-        result = check_spaceusage(nexenta)
-        if result:
-            output.extend(result)
+        check_spaceusage(nexenta, plugin)
 
     if arguments.triggers:
-        result = check_triggers(nexenta)
-        if result:
-            output.extend(result)
+        check_triggers(nexenta, plugin)
 
     if arguments.extend_data:
-        out, perf = collect_extends(nexenta)
-        if out:
-            output.extend(out)
-        if perf:
-            perfdata.extend(perf)
+        collect_extends(nexenta, plugin)
 
     if arguments.perfdata:
-        out, perf = collect_perfdata(nexenta)
-        if out:
-            output.extend(out)
-        if perf:
-            perfdata.extend(perf)
+        collect_perfdata(nexenta, plugin)
 
     if arguments.autosync:
-        result = check_snapshot_age(nexenta)
-        if result:
-            output.extend(result)
+        check_snapshot_age(nexenta, plugin)
 
-    if NagiosStates.RC == NagiosStates.OK:
-        output.append('Nexenta check OK')
-
-    # Append performance data if collected and print output.
-    if perfdata:
-        return "%s|%s" % ('<br>'.join(output), ' '.join(perfdata))
-    else:
-        return '<br>'.join(output)
+    plugin.exit()
 
 
 if __name__ == '__main__':
-    print(main())
-    sys.exit(NagiosStates.RC)
+    main()
