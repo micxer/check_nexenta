@@ -19,7 +19,7 @@
 
 import ConfigParser
 import base64
-import getopt
+import argparse
 import os
 import sys
 import urllib2
@@ -63,24 +63,17 @@ class NagiosStates:
                 NagiosStates.__dict__[name] = value
 
 
-class ReadConfig:
+class Configuration:
     parse = None
 
     def __init__(self):
         pass
 
-    # Check configfile for path, append script path if no path was given.
-    # Default to <scriptname>.cfg if no configfile was given.
     @staticmethod
     def open_config(configfile):
-        if not configfile:
-            configfile = os.path.splitext(os.path.abspath(__file__))[0] + '.cfg'
-        elif not os.path.dirname(configfile):
-            configfile = os.path.join(os.path.dirname(__file__), configfile)
-
-        ReadConfig.parse = ConfigParser.ConfigParser()
+        Configuration.parse = ConfigParser.ConfigParser()
         try:
-            ReadConfig.parse.readfp(open(configfile))
+            Configuration.parse.readfp(open(configfile))
         except IOError:
             raise CritError("Can not open configuration file: %s" % configfile)
 
@@ -88,7 +81,7 @@ class ReadConfig:
     @staticmethod
     def get_option(section, option):
         try:
-            return ReadConfig.parse.get(section, option)
+            return Configuration.parse.get(section, option)
         except ConfigParser.NoOptionError:
             return None
         except ConfigParser.NoSectionError:
@@ -105,7 +98,7 @@ class ReadConfig:
 class NexentaApi:
     # Get the connection info and build the api url.
     def __init__(self, nexenta):
-        cfg = ReadConfig()
+        cfg = Configuration()
         username = cfg.get_option(nexenta['hostname'], 'api_user')
         password = cfg.get_option(nexenta['hostname'], 'api_pass')
         self.nms_retry = cfg.get_option(nexenta['hostname'], 'nms_retry')
@@ -162,7 +155,7 @@ class NexentaApi:
 class SnmpRequest:
     # Read config file and build the NDMP session.
     def __init__(self, nexenta):
-        cfg = ReadConfig()
+        cfg = Configuration()
 
         username = cfg.get_option(nexenta['hostname'], 'snmp_user')
         password = cfg.get_option(nexenta['hostname'], 'snmp_pass')
@@ -210,7 +203,7 @@ def convert_space(size):
 
 # Convert severity/description for known errors defined in config file.
 def known_errors(result):
-    cfg = ReadConfig()
+    cfg = Configuration()
     severity = []
     description = []
 
@@ -256,7 +249,7 @@ def known_errors(result):
 
 # Check volume space usage.
 def check_spaceusage(nexenta):
-    cfg = ReadConfig()
+    cfg = Configuration()
     errors = []
 
     # Only check space usage if space thresholds are configured in the config file.
@@ -353,7 +346,7 @@ def check_spaceusage(nexenta):
 
 # Check Nexenta runners for faults.
 def check_triggers(nexenta):
-    cfg = ReadConfig()
+    cfg = Configuration()
     rc = NagiosStates()
     errors = []
 
@@ -386,7 +379,7 @@ def check_triggers(nexenta):
 
 # Get snmp extend data and write to Output and/or Perfdata.
 def collect_extends(nexenta):
-    cfg = ReadConfig()
+    cfg = Configuration()
     rc = NagiosStates()
     output = []
     perfdata = []
@@ -422,7 +415,7 @@ def collect_extends(nexenta):
 
 # Collect Nexenta performance data.
 def collect_perfdata(nexenta):
-    cfg = ReadConfig()
+    cfg = Configuration()
     rc = NagiosStates()
     perfdata = []
     output = []
@@ -500,7 +493,7 @@ def collect_perfdata(nexenta):
 
 # Check age of AutoSync snapshots
 def check_snapshot_age(nexenta):
-    cfg = ReadConfig()
+    cfg = Configuration()
     rc = NagiosStates()
     errors = []
 
@@ -536,26 +529,53 @@ def check_snapshot_age(nexenta):
     return errors
 
 
-# Main
-def main(argv):
-    # Parse command line arguments.
-    try:
-        opts, args = getopt.getopt(argv, 'H:DTPEhVf:S', ['hostname', 'help', 'version'])
-    except getopt.GetoptError:
-        raise CritError('Invalid arguments, usage: -H <hostname>, [-D(space usage)], '
-                        '[-T(triggers)], [-P(perfdata)], [-E(extends)], [-f(config file)], '
-                        '[-h(help)], [-V(version)], [-S(autosync)]')
+def main():
+    argument_parser = argparse.ArgumentParser(
+        description='Script to provide performance data and monitor the health of Nexenta clusters and nodes.'
+    )
+    argument_parser.add_argument(
+        '-H', '--hostname',
+        required=True,
+        action='store',
+        dest='hostname',
+        help='Nexenta to check. Can be hostname or IP address. Must be configured in the config file.'
+    )
+    argument_parser.add_argument(
+        '-D', '--space_usage',
+        help='Check space usage of volumes. Thresholds are configured in the config file.',
+        action='store_true'
+    )
+    argument_parser.add_argument(
+        '-T', '--triggers',
+        help='Check fault triggers.',
+        action='store_true'
+    )
+    argument_parser.add_argument(
+        '-P', '--perfdata',
+        action='store_true',
+        help='Report SNMP performance data. Must be configured in the config file. Reports data for CPU, Disk, ' +
+             'Snapshot, Memory and Network.'
+    )
+    argument_parser.add_argument(
+        '-E', '--extend_data',
+        action='store_true',
+        help='Report SNMP extend data. Must be configured in the config file.'
+    )
+    argument_parser.add_argument(
+        '-f', '--configfile',
+        action='store',
+        dest='configfile',
+        help='Nexenta to check. Can be hostname or IP address. Must be configured in the config file.'
+    )
+    argument_parser.add_argument(
+        '-S', '--autosync',
+        action='store_true',
+        help='Check age of AutoSync snapshots.'
+    )
+    argument_parser.add_argument('-V, --version', action='version', version='%(prog)s 2.0.0')
+    arguments = argument_parser.parse_args()
 
-    configfile = ""
-    for opt, arg in opts:
-        if opt in ('-H', '--hostname'):
-            nexenta = arg
-        elif opt == '-f':
-            configfile = arg
-        elif opt in ('-h', '--help'):
-            print_usage()
-        elif opt in ('-V', '--version'):
-            print_version()
+    nexenta = arguments.hostname
 
     try:
         nexenta = {'hostname': nexenta, 'ip': socket.getaddrinfo(nexenta, None)[0][4][0]}
@@ -564,46 +584,54 @@ def main(argv):
     except socket.gaierror:
         raise CritError('No IP address found for %s!' % nexenta)
 
-    # If only -H is passed execute default checks.
-    if len(opts) == 1:
-        opts.extend([('-D', ''), ['-T', '']])
+    # check if only hostname was given
+    given_arguments = [argument for argument in arguments.__dict__ if arguments.__dict__[argument]]
+    if not [ga for ga in given_arguments if ga != 'hostname']:
+        arguments.space_usage = True
+        arguments.triggers = True
+
+    # Check configfile for path, append script path if no path was given.
+    # Default to <scriptname>.cfg if no configfile was given.
+    if not arguments.configfile:
+        arguments.configfile = os.path.splitext(os.path.abspath(__file__))[0] + '.cfg'
+    elif not os.path.dirname(arguments.configfile):
+        arguments.configfile = os.path.join(os.path.dirname(__file__), arguments.configfile)
 
     # Open the configfile for use and start the checks.
-    cfg = ReadConfig()
-    cfg.open_config(configfile)
+    cfg = Configuration()
+    cfg.open_config(arguments.configfile)
 
     output = []
     perfdata = []
-    for opt, arg in opts:
-        if opt == '-D':
-            # Check spage usage.
-            result = check_spaceusage(nexenta)
-            if result:
-                output.extend(result)
-        elif opt == '-T':
-            # Check fault triggers.
-            result = check_triggers(nexenta)
-            if result:
-                output.extend(result)
-        elif opt == '-E':
-            # Run SNMP extend scripts and collect output/performance data.
-            out, perf = collect_extends(nexenta)
-            if out:
-                output.extend(out)
-            if perf:
-                perfdata.extend(perf)
-        elif opt == '-P':
-            # Collect performance data.
-            out, perf = collect_perfdata(nexenta)
-            if out:
-                output.extend(out)
-            if perf:
-                perfdata.extend(perf)
-        elif opt == '-S':
-            # Check age of autosync snapshots.
-            result = check_snapshot_age(nexenta)
-            if result:
-                output.extend(result)
+
+    if arguments.space_usage:
+        result = check_spaceusage(nexenta)
+        if result:
+            output.extend(result)
+
+    if arguments.triggers:
+        result = check_triggers(nexenta)
+        if result:
+            output.extend(result)
+
+    if arguments.extend_data:
+        out, perf = collect_extends(nexenta)
+        if out:
+            output.extend(out)
+        if perf:
+            perfdata.extend(perf)
+
+    if arguments.perfdata:
+        out, perf = collect_perfdata(nexenta)
+        if out:
+            output.extend(out)
+        if perf:
+            perfdata.extend(perf)
+
+    if arguments.autosync:
+        result = check_snapshot_age(nexenta)
+        if result:
+            output.extend(result)
 
     if NagiosStates.RC == NagiosStates.OK:
         output.append('Nexenta check OK')
@@ -615,83 +643,6 @@ def main(argv):
         return '<br>'.join(output)
 
 
-def print_usage():
-    print("""usage: check_nexenta.py -H <arg> [options]
-Options and arguments (defaults to [-D, -T] if only -H is given):
--H arg : Nexenta to check. Can be hostname or IP adress. Must be configured in
-         the config file. Short for --hostname.
--D     : Check space usage of volumes. Thresholds are configured in the config
-         file.
--T     : Check fault triggers.
--S     : Check age of AutoSync snapshots.
--P     : Report SNMP performance data. Must be configured in the config file.
-         Reports data for CPU, Disk, Snapshot, Memory and Network.
--E     : Report SNMP extend data. Must be configured in the config file.
-       : See help below on snmp_extend for more info.
--f     : Config file to use. Defaults to <scriptname>.cfg if not given.
--V     : Show version information. Short for --version.
--h     : Show help information. Short for --help.
-
-Config file sections and options:
-[<hostname>]    : Nexenta to check. Should match argument passed to -H.
-                  Config file can contain multiple sections of [<hostname>].
-api_user        : Username which has API rights on the Nexenta
-api_pass        : Password for the user with API rights.
-api_ssl         : Use HTTP-SSL (https://) for connection.
-api_port        : Port used for API connection to the Nexenta. Defaults to
-                  standard NMV port (2000) if not set.
-snmp_user       : SNMP username with ro rights on the Nexenta. Only needed
-                  for SNMP v3.
-snmp_pass       : Password for the SNMP user. Only needed for SNMP v3.
-snmp_community  : SNMP ro community. Only needed for SNMP v2. Will not be
-                  used if snmp_user and snmp_pass are configured.
-snmp_port       : Port used for SNMP connection to the Nexenta. Defaults to
-                  standard SNMP port (161) if not set.
-snmp_extend     : If set to ON, query SNMP extend for data. SNMP extend on a
-                  Nexenta can be multiple scripts. Each line of output from a
-                  extend script must start with PERFDATA: followed by any
-                  performance data you wish to collect, or OUTPUT: followed
-                  by either WARNING or CRITICAL and the message to report.
-                  Two examples of output extend scripts could generate:
-                  PERFDATA:'ARC hit'=75% 'ARC miss'=17%
-                  OUTPUT:WARNING: ARC hit ratio below 80%!
-skip_trigger    : If set to ON, do not check fault triggers. Usefull to 
-                  prevent double fault reporting when checking a virtual node
-                  of a Nexenta HA cluster.
-skip_folderperf : If set to ON, do not return performance data for folders.
-                  Usefull to prevent double performance reporting when checking
-                  a virtual node of a Nexenta HA cluster.
-space_threshold : Thresholds for the folder space usage check. Can be multiple
-                  lines formatted as <folder>;<vol-warning>;<vol-critical>;
-                  <snap-warning>;<snap-critical>.
-                  <folder> can be a specific volume or DEFAULT.
-                  Volume thresholds can be a percentage of space used(%),
-                  amount of free space([M,G,T]) or IGNORE.
-                  Snapshot thresholds can be a percentage of space used(%),
-                  amount of space used([M,G,T]) or IGNORE.
-                  DEFAULT thresholds are applied to all folders not specified.
-nms_retry       : Sets the max number of retries when NMS is unresponsive.
-                  Defaults to 2 if not set.
-[known_errors]  : Convert severity and/or description of known error messages.
-                  Can consist of multiple error messages formatted as
-                  <error message> = <severity>;<description>.
-                  <error message> can be a part of a error message or DEFAULT.
-                  <severity> can be DEFAULT,WARNING,CRITICAL,UNKNOWN or IGNORE
-                  DEFAULT severity does not change the original severity level.
-                  If IGNORE is set as severity the entire message is ignored.
-                  <description> is the description to which the error message
-                  will be changed. It is possible to set <severity> but not
-                  <description>. If no match is found the DEFAULT description
-                  will be appended to the orignial error message(if a DEFAULT
-                  has been configured).""")
-    sys.exit()
-
-
-def print_version():
-    print('Version 1.1.0')
-    sys.exit()
-
-
 if __name__ == '__main__':
-    print(main(sys.argv[1:]))
+    print(main())
     sys.exit(NagiosStates.RC)
