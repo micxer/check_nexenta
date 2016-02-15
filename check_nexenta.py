@@ -17,37 +17,6 @@
 #      specific language governing permissions and limitations
 #      under the License.
 
-# ----------------------------------------------------------------
-# 2012/09/25 v1.0.0 Brenn Oosterbaan - initial version
-# 2012/10/03 v1.0.1 Brenn Oosterbaan - bug fix in API error handling
-# 2012/10/08 v1.0.2 Brenn Oosterbaan - code optimization, bug fixes in
-#                               space thresholds, added volume
-#                               compression to performance data
-#                               and extra support for HA clusters
-# 2012/02/11 v1.0.3 Brenn Oosterbaan - python 2.4 compatible
-# 2013/02/13 v1.0.4 Brenn Oosterbaan - added 2 retries for API connect
-# 2013/02/14 v1.0.5 Patrick - added https and snmp v2 support
-# 2013/02/15 v1.0.6 Brenn Oosterbaan - simplified snmp v2/v3 support
-# 2013/02/16 v1.0.7 Brenn Oosterbaan - only lookup hostname once
-# 2013/06/24 v1.0.8 Brenn Oosterbaan - added option to IGNORE messages
-# 2013/08/22 v1.0.9 Brenn Oosterbaan - added option to change only
-#                                severity for known errors, and 
-#                                improved code readability
-# 2013/11/18 v1.0.10 Brenn Oosterbaan - handle NMS unresponiveness
-# 2014/05/24 v1.0.11 Brenn Oosterbaan - bugfix in NMS unresponiveness
-# 2014/07/02 v1.0.12 Brenn Oosterbaan - bugfix in ReadConfig
-# 2014/07/02 v1.0.13 Brenn Oosterbaan - added nms retry value
-# 2016/02/11 v1.0.14 Michael Weinrich - code style fixes (PEP8)
-# ----------------------------------------------------------------
-# ----------------------------------------------------------------
-# Schuberg Philis 2012
-# ----------------------------------------------------------------
-# Description:
-#
-# Script to provide performance data and monitor
-# the health of Nexenta clusters and nodes.
-# ----------------------------------------------------------------
-
 import ConfigParser
 import base64
 import getopt
