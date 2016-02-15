@@ -585,8 +585,9 @@ def main():
         raise CritError('No IP address found for %s!' % nexenta)
 
     # check if only hostname was given
-    given_arguments = [argument for argument in arguments.__dict__ if arguments.__dict__[argument]]
-    if not [ga for ga in given_arguments if ga != 'hostname']:
+    given_arguments = [argument for argument in arguments.__dict__
+                       if arguments.__dict__[argument] and argument != 'hostname']
+    if not given_arguments:
         arguments.space_usage = True
         arguments.triggers = True
 
