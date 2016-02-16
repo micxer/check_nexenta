@@ -44,64 +44,26 @@ class CritError(Exception):
         plugin.exit(exit_code=pynag.Plugins.critical, long_output="CRITICAL: %s" % message)
 
 
-class Configuration:
-    parse = None
-
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def open_config(configfile):
-        Configuration.parse = ConfigParser.ConfigParser()
-        try:
-            Configuration.parse.readfp(open(configfile))
-        except IOError:
-            raise CritError("Can not open configuration file: %s" % configfile)
-
-    # Get values from the config file.
-    @staticmethod
-    def get_option(section, option):
-        try:
-            return Configuration.parse.get(section, option)
-        except ConfigParser.NoOptionError:
-            return None
-        except ConfigParser.NoSectionError:
-            raise CritError("%s not defined in config file!" % section)
-
-    # For 'known errors' we want to return the result if a option matches part of a string, or None.
-    def known_errors(self, message):
-        for known in self.parse.options('known_errors'):
-            if known in message.lower():
-                return self.parse.get('known_errors', known)
-        return None
-
-
 class NexentaApi:
     # Get the connection info and build the api url.
-    def __init__(self, nexenta):
-        cfg = Configuration()
-        username = cfg.get_option(nexenta['hostname'], 'api_user')
-        password = cfg.get_option(nexenta['hostname'], 'api_pass')
-        self.nms_retry = cfg.get_option(nexenta['hostname'], 'nms_retry')
+    def __init__(self, api_user, api_pass, api_ssl, ip, api_port, nms_retry):
+        self.nms_retry = nms_retry
 
-        if not username or not password:
-            raise CritError("No connection info configured for %s" % nexenta['hostname'])
+        if not api_user or not api_pass:
+            raise CritError("No connection info configured for %s" % ip)
         if not self.nms_retry:
             self.nms_retry = 2
 
-        ssl = cfg.get_option(nexenta['hostname'], 'api_ssl')
-        if ssl != 'ON':
+        if api_ssl != 'ON':
             protocol = 'http'
         else:
             protocol = 'https'
 
-        port = cfg.get_option(nexenta['hostname'], 'api_port')
-        if not port:
-            port = 2000
+        if not api_port:
+            api_port = 2000
 
-        self.base64_string = base64.encodestring('%s:%s' % (username, password))[:-1]
-        self.url = "%s://%s:%s/rest/nms/ <%s://%s:%s/rest/nms/>" % (protocol, nexenta['ip'], port, protocol,
-                                                                    nexenta['ip'], port)
+        self.base64_string = base64.encodestring('%s:%s' % (api_user, api_pass))[:-1]
+        self.url = "%s://%s:%s/rest/nms/ <%s://%s:%s/rest/nms/>" % (protocol, ip, api_port, protocol, ip, api_port)
 
     # Build the request and return the response.
     def get_data(self, obj, method, params):
@@ -133,24 +95,18 @@ class NexentaApi:
 
 class SnmpRequest:
     # Read config file and build the NDMP session.
-    def __init__(self, nexenta):
-        cfg = Configuration()
-
-        username = cfg.get_option(nexenta['hostname'], 'snmp_user')
-        password = cfg.get_option(nexenta['hostname'], 'snmp_pass')
-        community = cfg.get_option(nexenta['hostname'], 'snmp_community')
-        port = cfg.get_option(nexenta['hostname'], 'snmp_port')
-        if not port:
-            port = 161
+    def __init__(self, snmp_user, snmp_pass, snmp_community, ip, snmp_port):
+        if not snmp_port:
+            snmp_port = 161
 
         # If username/password use SNMP v3, else use SNMP v2.
-        if username and password:
-            self.session = netsnmp.Session(DestHost="%s:%s" % (nexenta['ip'], port), Version=3, SecLevel='authNoPriv',
-                                           AuthProto='MD5', AuthPass=password, SecName=username)
-        elif community:
-            self.session = netsnmp.Session(DestHost="%s:%s" % (nexenta['ip'], port), Version=2, Community=community)
+        if snmp_user and snmp_pass:
+            self.session = netsnmp.Session(DestHost="%s:%s" % (ip, snmp_port), Version=3, SecLevel='authNoPriv',
+                                           AuthProto='MD5', AuthPass=snmp_pass, SecName=snmp_user)
+        elif snmp_community:
+            self.session = netsnmp.Session(DestHost="%s:%s" % (ip, snmp_port), Version=2, Community=snmp_community)
         else:
-            raise CritError("Incorrect SNMP info configured for %s" % nexenta['hostname'])
+            raise CritError("Incorrect SNMP info configured for %s" % ip)
 
     # Return the SNMP get value.
     def get_snmp(self, oid):
@@ -171,317 +127,350 @@ class SnmpRequest:
             return values
 
 
-# Convert human readable to real numbers.
-def convert_space(size):
-    size_types = {'B': 1, 'K': 1024, 'M': 1048576, 'G': 1073741824, 'T': 1099511627776}
-    try:
-        return float(size[:-1]) * int(size_types[size[-1:]])
-    except (KeyError, ValueError):
-        return 0
+class NexentaCheck:
+    """
+    :type config: ConfigParser.ConfigParser
+    :type plugin: pynag.Plugins.PluginHelper
+    :type nexenta: Nexenta
+    :type api: NexentaApi
+    :type snmpRequest: SnmpRequest
+    """
+    config = None
+    plugin = None
+    nexenta = None
+    api = None
+    snmpRequest = None
 
+    def __init__(self, plugin, nexenta, configfile):
+        self.nexenta = nexenta
+        self.plugin = plugin
+        self.plugin.add_status('ok')
 
-# Convert severity/description for known errors defined in config file.
-def known_errors(result):
-    cfg = Configuration()
-    severity = []
-    description = []
+        self.open_config(configfile)
+        self.api = NexentaApi(
+            self.get_option(nexenta['hostname'], 'api_user'),
+            self.get_option(nexenta['hostname'], 'api_pass'),
+            self.get_option(nexenta['hostname'], 'api_ssl'),
+            nexenta['ip'],
+            self.get_option(nexenta['hostname'], 'api_port'),
+            self.get_option(nexenta['hostname'], 'nms_retry')
+        )
 
-    # Check if part of the message matches a string in the config file.
-    known_error = cfg.known_errors(result['description'])
-    if known_error:
-        # Match found, return severity/description.
         try:
-            severity, description = known_error.split(';')
-        except ValueError:
-            raise CritError("Error in config file at [known_errors], line: %s" % known_error)
+            netsnmp
+        except NameError:
+            self.plugin.add_status('warning')
+            self.plugin.add_long_output(
+                'WARNING: net-snmp-python not available, SNMP Performance Data will be skipped.')
+        else:
+            snmp_user = self.get_option(nexenta['hostname'], 'snmp_user')
+            snmp_pass = self.get_option(nexenta['hostname'], 'snmp_pass')
+            snmp_community = self.get_option(nexenta['hostname'], 'snmp_community')
+            snmp_port = self.get_option(nexenta['hostname'], 'snmp_port')
+            if (snmp_user and snmp_pass) or snmp_community:
+                self.snmpRequest = SnmpRequest(snmp_user, snmp_pass, snmp_community, self.nexenta['ip'], snmp_port)
 
-        if not severity.upper() in ('DEFAULT', 'WARNING', 'CRITICAL', 'UNKNOWN', 'IGNORE'):
-            raise CritError("Invalid severity in config file at [known_errors], line: %s" % known_error)
+    def critical_error(self, message):
+        self.plugin.exit(exit_code=pynag.Plugins.critical, long_output=message)
 
-    if not description:
-        # No match found or only severity match found, append default if defined in the config file.
-        default = cfg.get_option('known_errors', 'DEFAULT')
-        if default:
-            # Get the default description and append it
+    def open_config(self, configfile):
+        self.config = ConfigParser.ConfigParser()
+        try:
+            self.config.readfp(open(configfile))
+        except IOError:
+            self.critical_error("Can not open configuration file: %s" % configfile)
+
+    def get_option(self, section, option):
+        try:
+            return self.config.get(section, option)
+        except ConfigParser.NoOptionError:
+            return None
+        except ConfigParser.NoSectionError:
+            self.critical_error("%s not defined in config file!" % section)
+
+    def known_errors_in_config(self, message):
+        for known in self.config.options('known_errors'):
+            if known in message.lower():
+                return self.config.get('known_errors', known)
+        return None
+
+    def known_errors(self, result):
+        severity = []
+        description = []
+
+        # Check if part of the message matches a string in the config file.
+        known_error = self.known_errors_in_config(result['description'])
+        if known_error:
+            # Match found, return severity/description.
             try:
-                description = default.split(';')[1]
+                severity, description = known_error.split(';')
             except ValueError:
-                raise CritError("Error in config file at [known_errors], line: %s" % default)
-            description = "%s %s" % (result['description'], description)
+                self.critical_error("Error in config file at [known_errors], line: %s" % known_error)
 
-            # Get the default severity if there was no match in the config file
-            if not severity:
+            if not severity.upper() in ('DEFAULT', 'WARNING', 'CRITICAL', 'UNKNOWN', 'IGNORE'):
+                self.critical_error("Invalid severity in config file at [known_errors], line: %s" % known_error)
+
+        if not description:
+            # No match found or only severity match found, append default if defined in the config file.
+            default = self.get_option('known_errors', 'DEFAULT')
+            if default:
+                # Get the default description and append it
                 try:
-                    severity = default.split(';')[0]
+                    description = default.split(';')[1]
                 except ValueError:
-                    raise CritError("Error in config file at [known_errors], line: %s" % default)
-        else:
-            # No default found, pass the original description
-            description = result['description']
+                    self.critical_error("Error in config file at [known_errors], line: %s" % default)
 
-    # If default or no match, pass the original severity
-    if not severity or severity.upper() == 'DEFAULT':
-        severity = result['severity']
+                description = "%s %s" % (result['description'], description)
 
-    return severity.upper(), description
+                # Get the default severity if there was no match in the config file
+                if not severity:
+                    try:
+                        severity = default.split(';')[0]
+                    except ValueError:
+                        self.critical_error("Error in config file at [known_errors], line: %s" % default)
+            else:
+                # No default found, pass the original description
+                description = result['description']
 
+        # If default or no match, pass the original severity
+        if not severity or severity.upper() == 'DEFAULT':
+            severity = result['severity']
 
-# Check volume space usage.
-def check_spaceusage(nexenta, plugin):
-    cfg = Configuration()
+        return severity.upper(), description
 
-    # Only check space usage if space thresholds are configured in the config file.
-    thresholds = cfg.get_option(nexenta['hostname'], 'space_threshold')
-    if thresholds:
-        api = NexentaApi(nexenta)
+    @staticmethod
+    def convert_space(size):
+        size_types = {'B': 1, 'K': 1024, 'M': 1048576, 'G': 1073741824, 'T': 1099511627776}
+        try:
+            return float(size[:-1]) * int(size_types[size[-1:]])
+        except (KeyError, ValueError):
+            return 0
 
-        # Get a list of all volumes and add syspool.
-        volumes = api.get_data(obj='folder', method='get_names', params=[''])
-        volumes.extend(["syspool"])
+    # Check volume space usage.
+    def check_spaceusage(self):
 
-        for vol in volumes:
-            # Skip this volume if no match and no default in thresholds.
-            if not (vol + ';' in thresholds or 'DEFAULT;' in thresholds):
-                continue
+        # Only check space usage if space thresholds are configured in the config file.
+        thresholds = self.get_option(self.nexenta['hostname'], 'space_threshold')
+        if thresholds:
+            # Get a list of all volumes and add syspool.
+            volumes = self.api.get_data(obj='folder', method='get_names', params=[''])
+            volumes.extend(["syspool"])
 
-            for threshold in thresholds.split('\n'):
-                if not threshold:
+            for vol in volumes:
+                # Skip this volume if no match and no default in thresholds.
+                if not (vol + ';' in thresholds or 'DEFAULT;' in thresholds):
                     continue
 
-                # Check/extend the thresholds.
-                if len(threshold.split(';')) == 3:
-                    threshold += ';IGNORE;IGNORE'
-                elif len(threshold.split(';')) != 5:
-                    raise CritError(
-                        "Error in config file at [%s]:space_threshold, line %s" % (nexenta['hostname'], threshold))
-
-                # Get the thresholds, or fall back to the default tresholds.
-                if vol + ';' in thresholds:
-                    if threshold.split(';')[0] == vol:
-                        volwarn, volcrit, snapwarn, snapcrit = threshold.split(';')[1:]
-                elif 'DEFAULT;' in thresholds:
-                    if threshold.split(';')[0] == 'DEFAULT':
-                        volwarn, volcrit, snapwarn, snapcrit = threshold.split(';')[1:]
-
-            # Get volume properties.
-            volprops = api.get_data(obj='folder', method='get_child_props', params=[vol, ''])
-
-            # Get used/available space.
-            available = volprops.get('available')
-            snapused = volprops.get('usedbysnapshots')
-            volused = convert_space(volprops.get('used'))
-
-            snapusedprc = (convert_space(snapused) / (volused + convert_space(available))) * 100
-            volusedprc = (volused / (volused + convert_space(available))) * 100
-
-            # Check if a snapshot threshold has been met.
-            if snapwarn[:-1].isdigit():
-                if '%' in snapwarn:
-                    if int(snapwarn[:-1]) <= snapusedprc:
-                        plugin.add_status('warning')
-                        plugin.add_long_output("WARNING: %s%% of %s used by snaphots" % (int(snapusedprc), vol))
-                elif convert_space(snapwarn) <= convert_space(snapused):
-                    plugin.add_status('warning')
-                    plugin.add_long_output("WARNING: %s of %s used by snaphots" % (snapused, vol))
-
-            if snapcrit[:-1].isdigit():
-                if '%' in snapcrit:
-                    if int(snapcrit[:-1]) <= snapusedprc:
-                        plugin.add_status('critical')
-                        plugin.add_long_output("CRITICAL: %s%% of %s used by snaphots" % (int(snapusedprc), vol))
-                elif convert_space(snapcrit) <= convert_space(snapused):
-                    plugin.add_status('critical')
-                    plugin.add_long_output("CRITICAL: %s of %s used by snaphots" % (snapused, vol))
-
-            # Check if a folder threshold has been met.
-            if volcrit[:-1].isdigit():
-                if '%' in volcrit:
-                    if int(volcrit[:-1]) <= volusedprc:
-                        plugin.add_status('critical')
-                        plugin.add_long_output("CRITICAL: %s %s%% full!" % (vol, int(volusedprc)))
+                for threshold in thresholds.split('\n'):
+                    if not threshold:
                         continue
-                elif convert_space(volcrit) >= convert_space(available):
-                    plugin.add_status('critical')
-                    plugin.add_long_output("CRITICAL: %s %s available!" % (vol, available))
-                    continue
 
-            if volwarn[:-1].isdigit():
-                if '%' in volwarn:
-                    if int(volwarn[:-1]) <= volusedprc:
-                        plugin.add_status('warning')
-                        plugin.add_long_output("WARNING: %s %s%% full" % (vol, int(volusedprc)))
-                elif convert_space(volwarn) >= convert_space(available):
-                    plugin.add_status('warning')
-                    plugin.add_long_output("WARNING: %s %s available" % (vol, available))
+                    # Check/extend the thresholds.
+                    if len(threshold.split(';')) == 3:
+                        threshold += ';IGNORE;IGNORE'
+                    elif len(threshold.split(';')) != 5:
+                        raise CritError(
+                            "Error in config file at [%s]:space_threshold, line %s" % (
+                                self.nexenta['hostname'],
+                                threshold
+                            )
+                        )
 
+                    # Get the thresholds, or fall back to the default tresholds.
+                    if vol + ';' in thresholds:
+                        if threshold.split(';')[0] == vol:
+                            volwarn, volcrit, snapwarn, snapcrit = threshold.split(';')[1:]
+                    elif 'DEFAULT;' in thresholds:
+                        if threshold.split(';')[0] == 'DEFAULT':
+                            volwarn, volcrit, snapwarn, snapcrit = threshold.split(';')[1:]
 
-# Check Nexenta runners for faults.
-def check_triggers(nexenta, plugin):
-    cfg = Configuration()
+                # Get volume properties.
+                volprops = self.api.get_data(obj='folder', method='get_child_props', params=[vol, ''])
 
-    # Check all triggers, if skip_triggers is not set to 'on' in the config file.
-    skip = cfg.get_option(nexenta['hostname'], 'skip_trigger')
-    if skip != 'ON':
-        api = NexentaApi(nexenta)
+                # Get used/available space.
+                available = volprops.get('available')
+                snapused = volprops.get('usedbysnapshots')
+                volused = self.convert_space(volprops.get('used'))
 
-        triggers = api.get_data(obj='reporter', method='get_names_by_prop', params=['type', 'trigger', ''])
-        for trigger in triggers:
-            results = api.get_data(obj='trigger', method='get_faults', params=[trigger])
-            for result in results:
-                result = results[result]
+                snapusedprc = (self.convert_space(snapused) / (volused + self.convert_space(available))) * 100
+                volusedprc = (volused / (volused + self.convert_space(available))) * 100
 
-                # Convert severity/description.
-                severity, description = known_errors(result)
-                # Only append if severity is not 'IGNORE'
-                if not severity == 'IGNORE':
-                    if severity == 'CRITICAL':
-                        plugin.add_status('critical')
-                    elif severity == 'UNKNOWN':
-                        plugin.add_status('unknown')
-                    else:
-                        plugin.add_status('warning')
+                # Check if a snapshot threshold has been met.
+                if snapwarn[:-1].isdigit():
+                    if '%' in snapwarn:
+                        if int(snapwarn[:-1]) <= snapusedprc:
+                            self.plugin.add_status('warning')
+                            self.plugin.add_long_output(
+                                "WARNING: %s%% of %s used by snaphots" % (int(snapusedprc), vol))
+                    elif self.convert_space(snapwarn) <= self.convert_space(snapused):
+                        self.plugin.add_status('warning')
+                        self.plugin.add_long_output("WARNING: %s of %s used by snaphots" % (snapused, vol))
 
-                    plugin.add_long_output("%s:%s: %s" % (trigger, severity, description))
+                if snapcrit[:-1].isdigit():
+                    if '%' in snapcrit:
+                        if int(snapcrit[:-1]) <= snapusedprc:
+                            self.plugin.add_status('critical')
+                            self.plugin.add_long_output(
+                                "CRITICAL: %s%% of %s used by snaphots" % (int(snapusedprc), vol))
+                    elif self.convert_space(snapcrit) <= self.convert_space(snapused):
+                        self.plugin.add_status('critical')
+                        self.plugin.add_long_output("CRITICAL: %s of %s used by snaphots" % (snapused, vol))
 
+                # Check if a folder threshold has been met.
+                if volcrit[:-1].isdigit():
+                    if '%' in volcrit:
+                        if int(volcrit[:-1]) <= volusedprc:
+                            self.plugin.add_status('critical')
+                            self.plugin.add_long_output("CRITICAL: %s %s%% full!" % (vol, int(volusedprc)))
+                            continue
+                    elif self.convert_space(volcrit) >= self.convert_space(available):
+                        self.plugin.add_status('critical')
+                        self.plugin.add_long_output("CRITICAL: %s %s available!" % (vol, available))
+                        continue
 
-# Get snmp extend data and write to Output and/or Perfdata.
-def collect_extends(nexenta, plugin):
-    cfg = Configuration()
+                if volwarn[:-1].isdigit():
+                    if '%' in volwarn:
+                        if int(volwarn[:-1]) <= volusedprc:
+                            self.plugin.add_status('warning')
+                            self.plugin.add_long_output("WARNING: %s %s%% full" % (vol, int(volusedprc)))
+                    elif self.convert_space(volwarn) >= self.convert_space(available):
+                        self.plugin.add_status('warning')
+                        self.plugin.add_long_output("WARNING: %s %s available" % (vol, available))
 
-    # Collect snmp extend data, if snmp_extend is configured in the config file for this Nexenta.
-    extend = cfg.get_option(nexenta['hostname'], 'snmp_extend')
-    if extend == 'ON':
-        # Check for dependancy net-snmp-python.
-        try:
-            netsnmp
-        except NameError:
-            plugin.add_status('warning')
-            plugin.add_long_output('WARNING: net-snmp-python not available, SNMP Extend Data will be skipped.')
-            return
-        else:
-            snmp = SnmpRequest(nexenta)
+    # Check Nexenta runners for faults.
+    def check_triggers(self):
+        # Check all triggers, if skip_triggers is not set to 'on' in the config file.
+        skip = self.get_option(self.nexenta['hostname'], 'skip_trigger')
+        if skip != 'ON':
+            triggers = self.api.get_data(obj='reporter', method='get_names_by_prop', params=['type', 'trigger', ''])
+            for trigger in triggers:
+                results = self.api.get_data(obj='trigger', method='get_faults', params=[trigger])
+                for result in results:
+                    result = results[result]
 
-        # Snmp walk through all extends and collect the data.
-        extends = snmp.walk_snmp('NET-SNMP-EXTEND-MIB::nsExtendOutLine')
-        if extends:
-            for data in extends:
-                if 'PERFDATA:' in data.val:
-                    plugin.add_metric(perfdatastring=data.val.split('PERFDATA:')[1])
-                elif 'OUTPUT:' in data.val:
-                    plugin.add_metric(perfdatastring=data.val.split('OUTPUT:')[1])
+                    # Convert severity/description.
+                    severity, description = self.known_errors(result)
+                    # Only append if severity is not 'IGNORE'
+                    if not severity == 'IGNORE':
+                        if severity == 'CRITICAL':
+                            self.plugin.add_status('critical')
+                        elif severity == 'UNKNOWN':
+                            self.plugin.add_status('unknown')
+                        else:
+                            self.plugin.add_status('warning')
 
-                    if 'CRITICAL' in data.val:
-                        plugin.add_status('critical')
-                    elif 'WARNING' in data.val:
-                        plugin.add_status('warning')
+                        self.plugin.add_long_output("%s:%s: %s" % (trigger, severity, description))
 
+    # Get snmp extend data and write to Output and/or Perfdata.
+    def collect_extends(self):
+        # Collect snmp extend data, if snmp_extend is configured in the config file for this Nexenta.
+        extend = self.get_option(self.nexenta['hostname'], 'snmp_extend')
+        if extend == 'ON' and self.snmpRequest:
+            # Snmp walk through all extends and collect the data.
+            extends = self.snmpRequest.walk_snmp('NET-SNMP-EXTEND-MIB::nsExtendOutLine')
+            if extends:
+                for data in extends:
+                    if 'PERFDATA:' in data.val:
+                        self.plugin.add_metric(perfdatastring=data.val.split('PERFDATA:')[1])
+                    elif 'OUTPUT:' in data.val:
+                        self.plugin.add_metric(perfdatastring=data.val.split('OUTPUT:')[1])
 
-# Collect Nexenta performance data.
-def collect_perfdata(nexenta, plugin):
-    cfg = Configuration()
+                        if 'CRITICAL' in data.val:
+                            self.plugin.add_status('critical')
+                        elif 'WARNING' in data.val:
+                            self.plugin.add_status('warning')
 
-    # Collect SNMP performance data, if snmp is configured in the config file for this Nexenta.
-    if cfg.get_option(nexenta['hostname'], 'snmp_user') or cfg.get_option(nexenta['hostname'], 'snmp_community'):
-        # Check for dependancy net-snmp-python.
-        try:
-            netsnmp
-        except NameError:
-            plugin.add_status('warning')
-            plugin.add_long_output('WARNING: net-snmp-python not available, SNMP Performance Data will be skipped.')
-        else:
-            snmp = SnmpRequest(nexenta)
-
+    # Collect Nexenta performance data.
+    def collect_perfdata(self):
+        # Collect SNMP performance data, if snmp is configured in the config file for this Nexenta.
+        if self.snmpRequest:
             # Get CPU usage.
-            cpu_info = snmp.walk_snmp('HOST-RESOURCES-MIB::hrProcessorLoad')
+            cpu_info = self.snmpRequest.walk_snmp('HOST-RESOURCES-MIB::hrProcessorLoad')
             if cpu_info:
                 for cpu_id, cpu_load in enumerate(cpu_info):
-                    plugin.add_metric(label="CPU%s used" % cpu_id, value="%s%%" % cpu_load.val)
+                    self.plugin.add_metric(label="CPU%s used" % cpu_id, value="%s%%" % cpu_load.val)
 
             # Get Network Traffic.
-            interfaces = snmp.walk_snmp('IF-MIB::ifName')
+            interfaces = self.snmpRequest.walk_snmp('IF-MIB::ifName')
             if interfaces:
                 for interface in interfaces:
-                    intraffic = snmp.get_snmp('IF-MIB::ifHCInOctets.%s' % interface.iid)
-                    outtraffic = snmp.get_snmp('IF-MIB::ifHCOutOctets.%s' % interface.iid)
+                    intraffic = self.snmpRequest.get_snmp('IF-MIB::ifHCInOctets.%s' % interface.iid)
+                    outtraffic = self.snmpRequest.get_snmp('IF-MIB::ifHCOutOctets.%s' % interface.iid)
                     intraffic = int(intraffic) * 8
                     outtraffic = int(outtraffic) * 8
 
-                    plugin.add_metric(label="%s Traffic in" % interface.val, value="%sc" % intraffic)
-                    plugin.add_metric(label="%s Traffic out" % interface.val, value="%sc" % outtraffic)
+                    self.plugin.add_metric(label="%s Traffic in" % interface.val, value="%sc" % intraffic)
+                    self.plugin.add_metric(label="%s Traffic out" % interface.val, value="%sc" % outtraffic)
 
-    # Collect API performance data, if api is configured in the config file for this Nexenta.
-    if cfg.get_option(nexenta['hostname'], 'api_user') and cfg.get_option(nexenta['hostname'], 'api_pass'):
-        api = NexentaApi(nexenta)
-        volumes = []
+        # Collect API performance data, if api is configured in the config file for this Nexenta.
+        if self.get_option(self.nexenta['hostname'], 'api_user') and self.get_option(self.nexenta['hostname'],
+                                                                                     'api_pass'):
+            volumes = []
 
-        # Get perfdata for all volumes, or only for syspool if skip_folderperf is set to 'on'.
-        skip = cfg.get_option(nexenta['hostname'], 'skip_folderperf')
-        if skip != 'ON':
-            volumes.extend(api.get_data(obj='folder', method='get_names', params=['']))
+            # Get perfdata for all volumes, or only for syspool if skip_folderperf is set to 'on'.
+            skip = self.get_option(self.nexenta['hostname'], 'skip_folderperf')
+            if skip != 'ON':
+                volumes.extend(self.api.get_data(obj='folder', method='get_names', params=['']))
 
-        volumes.extend(['syspool'])
+            volumes.extend(['syspool'])
 
-        for vol in volumes:
-            # Get volume properties.
-            volprops = api.get_data(obj='folder', method='get_child_props', params=[vol, ''])
+            for vol in volumes:
+                # Get volume properties.
+                volprops = self.api.get_data(obj='folder', method='get_child_props', params=[vol, ''])
 
-            # Get volume used, free and snapshot space.
-            used = convert_space(volprops.get('used')) / 1024
-            free = convert_space(volprops.get('available')) / 1024
-            snap = convert_space(volprops.get('usedbysnapshots')) / 1024
+                # Get volume used, free and snapshot space.
+                used = self.convert_space(volprops.get('used')) / 1024
+                free = self.convert_space(volprops.get('available')) / 1024
+                snap = self.convert_space(volprops.get('usedbysnapshots')) / 1024
 
-            plugin.add_metric(label="/%s used" % vol, value="%sKB" % int(used))
-            plugin.add_metric(label="/%s free" % vol, value="%sKB" % int(free))
-            plugin.add_metric(label="/%s snapshot" % vol, value="%sKB" % int(snap))
+                self.plugin.add_metric(label="/%s used" % vol, value="%sKB" % int(used))
+                self.plugin.add_metric(label="/%s free" % vol, value="%sKB" % int(free))
+                self.plugin.add_metric(label="/%s snapshot" % vol, value="%sKB" % int(snap))
 
-            # Get compression ratio, if compression is enabled.
-            compression = volprops.get('compression')
-            if compression == 'on':
-                ratio = volprops.get('compressratio')
+                # Get compression ratio, if compression is enabled.
+                compression = volprops.get('compression')
+                if compression == 'on':
+                    ratio = volprops.get('compressratio')
 
-                plugin.add_metric(label="/%s compressratio" % vol, value="%s" % ratio[:-1])
+                    self.plugin.add_metric(label="/%s compressratio" % vol, value="%s" % ratio[:-1])
 
-        # Get memory used, free and paging.
-        memstats = api.get_data(obj='appliance', method='get_memstat', params=[''])
+            # Get memory used, free and paging.
+            memstats = self.api.get_data(obj='appliance', method='get_memstat', params=[''])
 
-        plugin.add_metric(label="Memory free", value="%sMB" % int(memstats.get('ram_free')))
-        plugin.add_metric(label="Memory used", value="%sMB" % (memstats.get('ram_total') - memstats.get('ram_free')))
-        plugin.add_metric(label="Memory paging", value="%sMB" % memstats.get('ram_paging'))
+            self.plugin.add_metric(label="Memory free", value="%sMB" % int(memstats.get('ram_free')))
+            self.plugin.add_metric(label="Memory used",
+                                   value="%sMB" % (memstats.get('ram_total') - memstats.get('ram_free')))
+            self.plugin.add_metric(label="Memory paging", value="%sMB" % memstats.get('ram_paging'))
 
+    # Check age of AutoSync snapshots
+    def check_snapshot_age(self):
+        max_age = int(self.get_option(self.nexenta['hostname'], 'snapshot_max_age'))
 
-# Check age of AutoSync snapshots
-def check_snapshot_age(nexenta, plugin):
-    cfg = Configuration()
+        # Check all triggers, if skip_triggers is not set to 'on' in the config file.
+        threshold_time = datetime.now() - timedelta(hours=max_age)
 
-    max_age = int(cfg.get_option(nexenta['hostname'], 'snapshot_max_age'))
+        snapshots = self.api.get_data(obj='snapshot', method='get_names', params=['AutoSync'])
 
-    # Check all triggers, if skip_triggers is not set to 'on' in the config file.
-    api = NexentaApi(nexenta)
+        if not snapshots:
+            self.plugin.add_status('critical')
+            self.plugin.add_long_output('CRITICAL: No AutoSync snapshots found')
 
-    threshold_time = datetime.now() - timedelta(hours=max_age)
+            return
 
-    snapshots = api.get_data(obj='snapshot', method='get_names', params=['AutoSync'])
+        newest_snapshot_info = {'timestamp': None, 'name': ''}
 
-    if not snapshots:
-        plugin.add_status('critical')
-        plugin.add_long_output('CRITICAL: No AutoSync snapshots found')
+        for snapshot in snapshots:
+            result = self.api.get_data(obj='snapshot', method='get_child_props', params=[snapshot, ''])
 
-        return
+            timestamp = datetime.fromtimestamp(float(result['creation_seconds']))
+            if not newest_snapshot_info['timestamp'] or newest_snapshot_info['timestamp'] < timestamp:
+                newest_snapshot_info = {'timestamp': timestamp, 'name': result['name']}
 
-    newest_snapshot_info = {'timestamp': None, 'name': ''}
-
-    for snapshot in snapshots:
-        result = api.get_data(obj='snapshot', method='get_child_props', params=[snapshot, ''])
-
-        timestamp = datetime.fromtimestamp(float(result['creation_seconds']))
-        if not newest_snapshot_info['timestamp'] or newest_snapshot_info['timestamp'] < timestamp:
-            newest_snapshot_info = {'timestamp': timestamp, 'name': result['name']}
-
-    if newest_snapshot_info['timestamp'] < threshold_time:
-        plugin.add_status('critical')
-        plugin.add_long_output(
-            '%s: Snapshot "%s" is older than %d hours' % ('CRITICAL', newest_snapshot_info['name'], max_age)
-        )
+        if newest_snapshot_info['timestamp'] < threshold_time:
+            self.plugin.add_status('critical')
+            self.plugin.add_long_output(
+                '%s: Snapshot "%s" is older than %d hours' % ('CRITICAL', newest_snapshot_info['name'], max_age)
+            )
 
 
 def main():
@@ -554,28 +543,27 @@ def main():
         arguments.configfile = os.path.join(os.path.dirname(__file__), arguments.configfile)
 
     # Open the configfile for use and start the checks.
-    cfg = Configuration()
-    cfg.open_config(arguments.configfile)
-
     now = datetime.now()
+
     plugin = pynag.Plugins.PluginHelper()
     plugin.add_summary("Last check: {}".format(now))
-    plugin.add_status('ok')
+
+    check = NexentaCheck(plugin, nexenta, arguments.configfile)
 
     if arguments.space_usage:
-        check_spaceusage(nexenta, plugin)
+        check.check_spaceusage()
 
     if arguments.triggers:
-        check_triggers(nexenta, plugin)
+        check.check_triggers()
 
     if arguments.extend_data:
-        collect_extends(nexenta, plugin)
+        check.collect_extends()
 
     if arguments.perfdata:
-        collect_perfdata(nexenta, plugin)
+        check.collect_perfdata()
 
     if arguments.autosync:
-        check_snapshot_age(nexenta, plugin)
+        check.check_snapshot_age()
 
     plugin.exit()
 
