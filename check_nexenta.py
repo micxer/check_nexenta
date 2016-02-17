@@ -467,6 +467,12 @@ class NexentaCheck:
             if not newest_snapshot_info['timestamp'] or newest_snapshot_info['timestamp'] < timestamp:
                 newest_snapshot_info = {'timestamp': timestamp, 'name': result['name']}
 
+        timediff = datetime.now() - newest_snapshot_info['timestamp']
+        self.plugin.add_metric(
+            label="Snapshot age: %s" % newest_snapshot_info['name'],
+            value="%0.1f" % (timediff.total_seconds() / 60 / 60)
+        )
+
         if newest_snapshot_info['timestamp'] < threshold_time:
             self.plugin.add_status('critical')
             self.plugin.add_long_output(
