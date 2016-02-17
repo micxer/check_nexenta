@@ -159,9 +159,10 @@ class NexentaCheck:
         try:
             netsnmp
         except NameError:
-            self.plugin.add_status('warning')
-            self.plugin.add_long_output(
-                'WARNING: net-snmp-python not available, SNMP Performance Data will be skipped.')
+            pass
+        #     self.plugin.add_status('warning')
+        #     self.plugin.add_long_output(
+        #         'WARNING: net-snmp-python not available, SNMP Performance Data will be skipped.')
         else:
             snmp_user = self.get_option(nexenta['hostname'], 'snmp_user')
             snmp_pass = self.get_option(nexenta['hostname'], 'snmp_pass')
