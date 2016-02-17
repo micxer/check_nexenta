@@ -404,44 +404,45 @@ class NexentaCheck:
                     self.plugin.add_metric(label="%s Traffic out" % interface.val, value="%sc" % outtraffic)
 
         # Collect API performance data, if api is configured in the config file for this Nexenta.
-        if self.get_option(self.nexenta['hostname'], 'api_user') and self.get_option(self.nexenta['hostname'],
-                                                                                     'api_pass'):
-            volumes = []
+        volumes = []
 
-            # Get perfdata for all volumes, or only for syspool if skip_folderperf is set to 'on'.
-            skip = self.get_option(self.nexenta['hostname'], 'skip_folderperf')
-            if skip != 'ON':
-                volumes.extend(self.api.get_data(obj='folder', method='get_names', params=['']))
+        # Get perfdata for all volumes, or only for syspool if skip_folderperf is set to 'on'.
+        skip = self.get_option(self.nexenta['hostname'], 'skip_folderperf')
+        if skip != 'ON':
+            volumes.extend(self.api.get_data(obj='folder', method='get_names', params=['']))
 
-            volumes.extend(['syspool'])
+        volumes.extend(['syspool'])
 
-            for vol in volumes:
-                # Get volume properties.
-                volprops = self.api.get_data(obj='folder', method='get_child_props', params=[vol, ''])
+        for vol in volumes:
+            # Get volume properties.
+            volprops = self.api.get_data(obj='folder', method='get_child_props', params=[vol, ''])
 
-                # Get volume used, free and snapshot space.
-                used = self.convert_space(volprops.get('used')) / 1024
-                free = self.convert_space(volprops.get('available')) / 1024
-                snap = self.convert_space(volprops.get('usedbysnapshots')) / 1024
+            # Get volume used, free and snapshot space.
+            used = self.convert_space(volprops.get('used')) / 1024
+            free = self.convert_space(volprops.get('available')) / 1024
+            snap = self.convert_space(volprops.get('usedbysnapshots')) / 1024
 
+            if self.get_option(self.nexenta['hostname'], 'skip_perf_usage') == 'False':
                 self.plugin.add_metric(label="/%s used" % vol, value="%sKB" % int(used))
+            if self.get_option(self.nexenta['hostname'], 'skip_perf_free') == 'False':
                 self.plugin.add_metric(label="/%s free" % vol, value="%sKB" % int(free))
+            if self.get_option(self.nexenta['hostname'], 'skip_perf_snapshot') == 'False':
                 self.plugin.add_metric(label="/%s snapshot" % vol, value="%sKB" % int(snap))
 
-                # Get compression ratio, if compression is enabled.
-                compression = volprops.get('compression')
-                if compression == 'on':
-                    ratio = volprops.get('compressratio')
+            # Get compression ratio, if compression is enabled.
+            compression = volprops.get('compression')
+            if compression == 'on':
+                ratio = volprops.get('compressratio')
 
-                    self.plugin.add_metric(label="/%s compressratio" % vol, value="%s" % ratio[:-1])
+                self.plugin.add_metric(label="/%s compressratio" % vol, value="%s" % ratio[:-1])
 
-            # Get memory used, free and paging.
-            memstats = self.api.get_data(obj='appliance', method='get_memstat', params=[''])
+        # Get memory used, free and paging.
+        memstats = self.api.get_data(obj='appliance', method='get_memstat', params=[''])
 
-            self.plugin.add_metric(label="Memory free", value="%sMB" % int(memstats.get('ram_free')))
-            self.plugin.add_metric(label="Memory used",
-                                   value="%sMB" % (memstats.get('ram_total') - memstats.get('ram_free')))
-            self.plugin.add_metric(label="Memory paging", value="%sMB" % memstats.get('ram_paging'))
+        self.plugin.add_metric(label="Memory free", value="%sMB" % int(memstats.get('ram_free')))
+        self.plugin.add_metric(label="Memory used",
+                               value="%sMB" % (memstats.get('ram_total') - memstats.get('ram_free')))
+        self.plugin.add_metric(label="Memory paging", value="%sMB" % memstats.get('ram_paging'))
 
     # Check age of AutoSync snapshots
     def check_snapshot_age(self):
